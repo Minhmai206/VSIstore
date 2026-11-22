@@ -1,0 +1,6 @@
+{
+  "name": "VSI — Thủ Công Mỹ Nghệ",
+  "description": "Cửa hàng trực tuyến các sản phẩm thủ công mỹ nghệ Việt Nam: gốm sứ Bát Tràng, mây tre đan Phú Vinh, sơn mài Hạ Thái, gỗ mỹ nghệ Đồng Kỵ và dệt lanh Lùng Tám.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

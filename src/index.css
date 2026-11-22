@@ -1,0 +1,73 @@
+
+@import "tailwindcss";
+
+@theme {
+  /* Typography - giữ nguyên */
+  --font-serif: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* VSI Education Brand Colors */
+
+  /* Màu nền */
+  --color-linen: #FFFFFF;
+  --color-cream: #FFFFFF;
+  --color-oat: #FFFFFF;
+
+  /* Màu đường viền */
+  --color-sand-border: #F2AB15;
+
+  /* Màu chữ */
+  --color-espresso: #073D63;
+  --color-umber: #073D63;
+  --color-taupe: #073D63;
+
+  /* Màu nút và điểm nhấn */
+  --color-walnut: #F2AB15;
+  --color-walnut-dark: #073D63;
+}
+
+/* Base Styles */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    background-color: #FFFFFF;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5)),
+      url("./assets/images/geometric-pattern-background.jpg");
+    background-repeat: repeat, repeat;
+    background-size: auto, 339.5px 384px;
+    background-attachment: fixed, fixed;
+    color: #073D63;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: transparent;
+    color: #073D63;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Tabular Numbers */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
