@@ -53,7 +53,8 @@ service cloud.firestore {
           'email', 'address', 'city', 'shippingMethod', 'paymentMethod',
           'paymentStatus', 'orderStatus', 'estimatedDelivery', 'subtotal',
           'discount', 'shippingFee', 'total', 'items', 'promoCode',
-          'ewalletProvider'
+          'paymentReference', 'quotedSubtotal', 'quotedDiscount',
+          'quotedShippingFee', 'quotedTotal'
         ])
         && request.resource.data.orderNumber == orderId
         && request.resource.data.customerUid == request.auth.uid
@@ -86,11 +87,50 @@ service cloud.firestore {
           !('promoCode' in request.resource.data)
           || request.resource.data.promoCode in ['MOCDAT10', 'FREESHIP']
         )
-        && !('paymentReference' in request.resource.data);
+        && (
+          !('paymentReference' in request.resource.data)
+          || (
+            request.resource.data.paymentMethod == 'vietqr'
+            && request.resource.data.paymentReference == orderId
+          )
+        )
+        && (
+          request.resource.data.paymentMethod != 'vietqr'
+          || request.resource.data.paymentReference == orderId
+        )
+        && (
+          !('quotedSubtotal' in request.resource.data)
+          || (
+            request.resource.data.quotedSubtotal is int
+            && request.resource.data.quotedSubtotal >= 0
+          )
+        )
+        && (
+          !('quotedDiscount' in request.resource.data)
+          || (
+            request.resource.data.quotedDiscount is int
+            && request.resource.data.quotedDiscount >= 0
+          )
+        )
+        && (
+          !('quotedShippingFee' in request.resource.data)
+          || (
+            request.resource.data.quotedShippingFee is int
+            && request.resource.data.quotedShippingFee >= 0
+          )
+        )
+        && (
+          !('quotedTotal' in request.resource.data)
+          || (
+            request.resource.data.quotedTotal is int
+            && request.resource.data.quotedTotal >= 0
+          )
+        );
 
       allow update: if (
         isAdmin()
         && resource.data.paymentStatus != 'awaiting_admin_review'
+        && resource.data.orderStatus != 'Chờ duyệt giá và tồn kho'
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['orderStatus'])
         && request.resource.data.orderStatus in [
@@ -103,13 +143,26 @@ service cloud.firestore {
             ]
       ) || (
         isAdmin()
-        && resource.data.paymentStatus == 'awaiting_admin_review'
+        && resource.data.paymentStatus in [
+          'awaiting_admin_review',
+          'awaiting_confirmation'
+        ]
         && resource.data.orderStatus == 'Chờ duyệt giá và tồn kho'
         && request.resource.data.orderStatus == 'Chờ xác nhận'
-        && request.resource.data.paymentStatus in [
-          'pending_payment',
-          'Thanh toán khi nhận hàng'
-        ]
+        && (
+          (
+            request.resource.data.paymentMethod == 'vietqr'
+            && request.resource.data.paymentReference == orderId
+            && request.resource.data.paymentStatus in [
+              'pending_payment',
+              'awaiting_confirmation'
+            ]
+          )
+          || (
+            request.resource.data.paymentMethod == 'cod'
+            && request.resource.data.paymentStatus == 'Thanh toán khi nhận hàng'
+          )
+        )
         && request.resource.data.subtotal is int
         && request.resource.data.discount is int
         && request.resource.data.shippingFee is int
@@ -122,18 +175,14 @@ service cloud.firestore {
             'orderStatus', 'paymentStatus', 'estimatedDelivery',
             'paymentReference'
           ])
-        && (
-          request.resource.data.paymentMethod != 'vietqr'
-          || (
-            request.resource.data.paymentReference == orderId
-            && request.resource.data.paymentStatus == 'pending_payment'
-          )
-        )
       ) || (
         signedIn()
         && resource.data.customerUid == request.auth.uid
         && resource.data.paymentMethod == 'vietqr'
-        && resource.data.paymentStatus == 'pending_payment'
+        && resource.data.paymentStatus in [
+          'pending_payment',
+          'awaiting_admin_review'
+        ]
         && resource.data.orderStatus != 'Đã hủy'
         && request.resource.data.paymentStatus == 'awaiting_confirmation'
         && request.resource.data.paymentSubmittedAt is string
@@ -144,6 +193,7 @@ service cloud.firestore {
         && resource.data.paymentMethod == 'vietqr'
         && resource.data.paymentStatus == 'awaiting_confirmation'
         && resource.data.orderStatus != 'Đã hủy'
+        && resource.data.orderStatus != 'Chờ duyệt giá và tồn kho'
         && request.resource.data.paymentStatus in ['paid', 'pending_payment']
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly([

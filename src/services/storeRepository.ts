@@ -10,7 +10,6 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
-import { INITIAL_ORDERS } from '../data/products';
 import { Order, OrderStatus, Product } from '../types/shop';
 import {
   getFirestoreInstance,
@@ -204,9 +203,9 @@ export function getStorageBackendMode(): StorageBackendMode {
 function readLocalOrders(): Order[] {
   try {
     const raw = localStorage.getItem(ORDERS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Order[]) : INITIAL_ORDERS;
+    return raw ? (JSON.parse(raw) as Order[]) : [];
   } catch {
-    return INITIAL_ORDERS;
+    return [];
   }
 }
 
@@ -350,6 +349,30 @@ export async function fetchAdminOrders(): Promise<Order[]> {
   return orders;
 }
 
+export async function clearAllStoreOrders(): Promise<void> {
+  const db = getFirestoreInstance();
+  if (db) {
+    const snapshot = await getDocs(collection(db, 'orders'));
+    await Promise.all(
+      snapshot.docs.map((orderSnapshot) =>
+        deleteDoc(doc(db, 'orders', orderSnapshot.id))
+      )
+    );
+  }
+  writeLocalOrders([]);
+
+  try {
+    Object.keys(localStorage)
+      .filter((key) =>
+        key.startsWith(CUSTOMER_ORDER_IDS_STORAGE_KEY) ||
+        key.startsWith(PENDING_CUSTOMER_ORDER_STORAGE_KEY)
+      )
+      .forEach((key) => localStorage.removeItem(key));
+  } catch (error) {
+    console.warn('Could not clear cached customer order references.', error);
+  }
+}
+
 export function observeAdminOrders(
   onOrders: (orders: Order[]) => void,
   onError: (error: Error) => void
@@ -387,20 +410,28 @@ export async function createStoreOrder(order: Order): Promise<Order> {
 
   const orderRequest: Order = {
     ...order,
-    paymentReference: undefined,
     paymentStatus: 'awaiting_admin_review',
     orderStatus: 'Chờ duyệt giá và tồn kho',
     estimatedDelivery: '',
+    quotedSubtotal: order.subtotal,
+    quotedDiscount: order.discount,
+    quotedShippingFee: order.shippingFee,
+    quotedTotal: order.total,
     subtotal: 0,
     discount: 0,
     shippingFee: 0,
     total: 0,
+    ...(order.paymentMethod === 'vietqr'
+      ? { paymentReference: order.orderNumber }
+      : {}),
     items: order.items.map((item) => ({
       ...item,
       unitPrice: 0,
     })),
   };
-  delete orderRequest.paymentReference;
+  if (order.paymentMethod !== 'vietqr') {
+    delete orderRequest.paymentReference;
+  }
   await setDoc(doc(db, 'orders', order.orderNumber), orderRequest);
 
   saveLocalOrder(orderRequest);
@@ -422,7 +453,9 @@ export async function approveStoreOrder(
     : readLocalOrders().find((order) => order.orderNumber === orderNumber);
   if (!sourceOrder) throw new Error('Không tìm thấy đơn hàng.');
   if (
-    sourceOrder.paymentStatus !== 'awaiting_admin_review' ||
+    !['awaiting_admin_review', 'awaiting_confirmation'].includes(
+      sourceOrder.paymentStatus
+    ) ||
     sourceOrder.orderStatus !== 'Chờ duyệt giá và tồn kho'
   ) {
     throw new Error('Đơn hàng này đã được duyệt hoặc không còn chờ duyệt.');
@@ -531,7 +564,9 @@ export async function approveStoreOrder(
     orderStatus: 'Chờ xác nhận',
     paymentStatus:
       sourceOrder.paymentMethod === 'vietqr'
-        ? 'pending_payment'
+        ? sourceOrder.paymentStatus === 'awaiting_confirmation'
+          ? 'awaiting_confirmation'
+          : 'pending_payment'
         : 'Thanh toán khi nhận hàng',
     ...(sourceOrder.paymentMethod === 'vietqr'
       ? { paymentReference: sourceOrder.orderNumber }

@@ -60,6 +60,7 @@ interface AdminDashboardProps {
     note?: string
   ) => Promise<void> | void;
   onApproveOrder: (orderNumber: string) => Promise<Order>;
+  onClearAllOrders: () => Promise<void> | void;
 }
 
 const ORDER_STATUS_OPTIONS: OrderStatus[] = [
@@ -190,6 +191,33 @@ function optimizeLocalImageFile(file: File): Promise<string> {
   });
 }
 
+function parseOrderDate(value: string): Date | null {
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (isoMatch) {
+    return new Date(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]) - 1,
+      Number(isoMatch[3])
+    );
+  }
+  const localMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(value);
+  if (localMatch) {
+    return new Date(
+      Number(localMatch[3]),
+      Number(localMatch[2]) - 1,
+      Number(localMatch[1])
+    );
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getMonthKey(value: string): string {
+  const date = parseOrderDate(value);
+  if (!date) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export function AdminDashboard({
   products,
   orders,
@@ -200,6 +228,7 @@ export function AdminDashboard({
   onUpdateOrderStatus,
   onConfirmOrderPayment,
   onApproveOrder,
+  onClearAllOrders,
 }: AdminDashboardProps) {
   const fieldId = useId().replace(/:/g, '');
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -208,6 +237,8 @@ export function AdminDashboard({
     useState<string>('Tất Cả');
   const [orderQuery, setOrderQuery] = useState('');
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>('Tất cả');
+  const [overviewMonth, setOverviewMonth] = useState('all');
+  const [clearOrdersBusy, setClearOrdersBusy] = useState(false);
   const [orderDateFrom, setOrderDateFrom] = useState('');
   const [orderDateTo, setOrderDateTo] = useState('');
   const [orderPage, setOrderPage] = useState(1);
@@ -233,13 +264,23 @@ export function AdminDashboard({
   const storageMode = getStorageBackendMode();
 
   const metrics = useMemo(() => {
-    const validOrders = orders.filter(
+    const baseValidOrders = orders.filter(
       (order) =>
         order.orderStatus !== 'Đã hủy' &&
         order.paymentStatus !== 'awaiting_admin_review'
     );
+    const validOrders =
+      overviewMonth === 'all'
+        ? baseValidOrders
+        : baseValidOrders.filter(
+            (order) => getMonthKey(order.createdAt) === overviewMonth
+          );
     const totalRevenue = validOrders.reduce((sum, o) => sum + o.total, 0);
-    const totalOrders = orders.length;
+    const totalOrders =
+      overviewMonth === 'all'
+        ? orders.length
+        : orders.filter((order) => getMonthKey(order.createdAt) === overviewMonth)
+            .length;
     const avgOrderValue =
       validOrders.length > 0 ? Math.round(totalRevenue / validOrders.length) : 0;
     const totalStockUnits = products.reduce(
@@ -269,6 +310,32 @@ export function AdminDashboard({
 
     const maxProductRevenue = Math.max(1, ...Object.values(productRevenue));
 
+    const now = new Date();
+    const monthlyData = Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - 11 + index, 1);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const monthOrders = baseValidOrders.filter(
+        (order) => getMonthKey(order.createdAt) === key
+      );
+      return {
+        key,
+        label: date.toLocaleDateString('vi-VN', {
+          month: '2-digit',
+          year: '2-digit',
+        }),
+        revenue: monthOrders.reduce((sum, order) => sum + order.total, 0),
+        orderCount: monthOrders.length,
+      };
+    });
+
+    const monthOptions = Array.from(
+      new Set(
+        orders
+          .map((order) => getMonthKey(order.createdAt))
+          .filter((key) => key.length > 0)
+      )
+    ).sort((a, b) => b.localeCompare(a));
+
     return {
       totalRevenue,
       totalOrders,
@@ -276,8 +343,10 @@ export function AdminDashboard({
       totalStockUnits,
       productRevenue,
       maxProductRevenue,
+      monthlyData,
+      monthOptions,
     };
-  }, [orders, products]);
+  }, [orders, products, overviewMonth]);
 
   const filteredProducts = useMemo(() => {
     const q = removeVietnameseDiacritics(productQuery);
@@ -468,6 +537,30 @@ export function AdminDashboard({
       );
     } finally {
       setPaymentConfirming(false);
+    }
+  };
+
+  const handleClearAllOrders = async () => {
+    if (
+      !window.confirm(
+        'Làm sạch toàn bộ dữ liệu đơn hàng và doanh thu? Thao tác này không thể hoàn tác.'
+      )
+    ) {
+      return;
+    }
+    setClearOrdersBusy(true);
+    setOrderActionError('');
+    try {
+      await onClearAllOrders();
+      setOverviewMonth('all');
+    } catch (error) {
+      setOrderActionError(
+        error instanceof Error
+          ? `Không thể làm sạch dữ liệu: ${error.message}`
+          : 'Không thể làm sạch dữ liệu. Vui lòng thử lại.'
+      );
+    } finally {
+      setClearOrdersBusy(false);
     }
   };
 
@@ -767,10 +860,8 @@ export function AdminDashboard({
               <ClipboardList className="w-4 h-4" />
               <span className="tabular-nums">
                 Đơn hàng ({orders.length})
-                {orders.some(
-                  (order) => order.paymentStatus === 'awaiting_admin_review'
-                ) &&
-                  ` · cần duyệt ${orders.filter((order) => order.paymentStatus === 'awaiting_admin_review').length}`}
+                {orders.some((order) => order.orderStatus === 'Chờ duyệt giá và tồn kho') &&
+                  ` · cần duyệt ${orders.filter((order) => order.orderStatus === 'Chờ duyệt giá và tồn kho').length}`}
               </span>
             </button>
 
@@ -838,6 +929,32 @@ export function AdminDashboard({
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            {activeTab === 'overview' && (
+              <>
+                <select
+                  aria-label="Lọc thống kê theo tháng"
+                  value={overviewMonth}
+                  onChange={(event) => setOverviewMonth(event.target.value)}
+                  className="rounded-lg border border-[#E2D7C6] bg-white px-3 py-2 text-xs font-medium text-[#2B2018]"
+                >
+                  <option value="all">Tất cả các tháng</option>
+                  {metrics.monthOptions.map((month) => (
+                    <option key={month} value={month}>
+                      Tháng {month.slice(5)}/{month.slice(0, 4)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={clearOrdersBusy || orders.length === 0}
+                  onClick={() => void handleClearAllOrders()}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[#D8AFA7] px-3 py-2 text-xs font-medium text-[#9E3B2B] hover:bg-[#F5E4E1] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>{clearOrdersBusy ? 'Đang làm sạch...' : 'Làm sạch dữ liệu'}</span>
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={openCreateProduct}
@@ -899,6 +1016,63 @@ export function AdminDashboard({
                     Thuộc {products.length} dòng chế tác
                   </p>
                 </div>
+              </div>
+
+              <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl p-6">
+                <div className="mb-5 flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-[#2B2018]">
+                      Phân tích doanh thu theo tháng
+                    </h2>
+                    <p className="mt-0.5 text-xs text-[#867363]">
+                      12 tháng gần nhất · cột doanh thu, số đơn ghi trên mỗi cột
+                    </p>
+                  </div>
+                  {overviewMonth !== 'all' && (
+                    <span className="rounded-lg bg-[#F8F4EE] px-3 py-1.5 text-xs font-medium text-[#073D63]">
+                      Đang xem tháng {overviewMonth.slice(5)}/{overviewMonth.slice(0, 4)}
+                    </span>
+                  )}
+                </div>
+
+                {metrics.monthlyData.every((month) => month.revenue === 0) ? (
+                  <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-[#E2D7C6] text-sm text-[#867363]">
+                    Chưa có dữ liệu doanh thu để phân tích.
+                  </div>
+                ) : (
+                  <div className="h-64 overflow-x-auto">
+                    <div className="flex h-full min-w-[760px] items-end gap-3 border-b border-[#E2D7C6] px-2 pt-7">
+                      {metrics.monthlyData.map((month) => {
+                        const maxRevenue = Math.max(
+                          1,
+                          ...metrics.monthlyData.map((item) => item.revenue)
+                        );
+                        const height =
+                          month.revenue > 0
+                            ? Math.max(8, Math.round((month.revenue / maxRevenue) * 200))
+                            : 4;
+                        return (
+                          <div
+                            key={month.key}
+                            className="flex h-full min-w-12 flex-1 flex-col justify-end text-center"
+                          >
+                            <div className="mb-1 text-[11px] font-semibold text-[#073D63] tabular-nums">
+                              {month.orderCount > 0 ? `${month.orderCount} đơn` : ''}
+                            </div>
+                            <div
+                              title={`${month.label}: ${formatVND(month.revenue)} · ${month.orderCount} đơn`}
+                              className="mx-auto w-full max-w-10 rounded-t-md bg-[#073D63]"
+                              style={{ height }}
+                            />
+                            <div className="mt-2 h-8 text-[10px] text-[#867363]">
+                              {month.label}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -1311,9 +1485,13 @@ export function AdminDashboard({
                                 {order.paymentMethod === 'cod' && 'COD'}
                               </p>
                               <p className="text-[#5E4B3C] mt-0.5">
-                                {order.paymentStatus === 'awaiting_admin_review'
-                                  ? 'Chờ duyệt giá'
-                                  : order.paymentStatus}
+                                {order.orderStatus === 'Chờ duyệt giá và tồn kho'
+                                  ? order.paymentStatus === 'awaiting_confirmation'
+                                    ? 'Khách báo đã chuyển khoản'
+                                    : 'Chờ xác minh đơn'
+                                  : order.paymentStatus === 'awaiting_confirmation'
+                                    ? 'Khách báo đã chuyển khoản'
+                                    : order.paymentStatus}
                               </p>
                             </td>
                             <td className="py-3.5 px-4">
@@ -1325,7 +1503,8 @@ export function AdminDashboard({
                                 name={`orderStatus-${order.orderNumber}`}
                                 value={order.orderStatus}
                                 disabled={
-                                  order.paymentStatus === 'awaiting_admin_review'
+                                  order.orderStatus ===
+                                  'Chờ duyệt giá và tồn kho'
                                 }
                                 onChange={(e) =>
                                   void handleOrderStatusChange(
@@ -1344,8 +1523,8 @@ export function AdminDashboard({
                               </select>
                             </td>
                             <td className="py-3.5 px-4 text-right font-semibold text-[#073D63] tabular-nums whitespace-nowrap">
-                              {order.paymentStatus === 'awaiting_admin_review'
-                                ? 'Chờ duyệt giá'
+                              {order.orderStatus === 'Chờ duyệt giá và tồn kho'
+                                ? `Tạm tính ${formatVND(order.quotedTotal ?? 0)}`
                                 : formatVND(order.total)}
                             </td>
                             <td className="py-3.5 px-6 text-right whitespace-nowrap">
@@ -2261,12 +2440,26 @@ export function AdminDashboard({
             </div>
 
             <div className="p-6 space-y-4 text-sm">
-              <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#3F5E3B]">
-                <CheckCircle2 className="w-4 h-4" />
+              <div
+                className={`inline-flex items-center gap-1.5 text-xs font-medium ${
+                  inspectingOrder.paymentStatus === 'paid'
+                    ? 'text-[#3F5E3B]'
+                    : 'text-[#073D63]'
+                }`}
+              >
+                {inspectingOrder.paymentStatus === 'paid' ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  <Package className="w-4 h-4" />
+                )}
                 <span>
-                  {inspectingOrder.paymentStatus === 'awaiting_admin_review'
-                    ? 'Chờ duyệt giá'
-                    : inspectingOrder.paymentStatus}{' '}
+                  {inspectingOrder.orderStatus === 'Chờ duyệt giá và tồn kho'
+                    ? inspectingOrder.paymentStatus === 'awaiting_confirmation'
+                      ? 'Khách báo đã chuyển khoản'
+                      : 'Chờ xác minh đơn'
+                    : inspectingOrder.paymentStatus === 'awaiting_confirmation'
+                      ? 'Khách báo đã chuyển khoản'
+                      : inspectingOrder.paymentStatus}{' '}
                   · {inspectingOrder.orderStatus}
                 </span>
               </div>
@@ -2275,12 +2468,12 @@ export function AdminDashboard({
                   {orderActionError}
                 </p>
               )}
-              {inspectingOrder.paymentStatus === 'awaiting_admin_review' && (
+              {inspectingOrder.orderStatus === 'Chờ duyệt giá và tồn kho' && (
                 <div className="space-y-2 rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] p-4">
                   <p className="text-xs leading-relaxed text-[#5E4B3C]">
-                    Đơn mới chưa có giá được xác nhận. Bấm duyệt để lấy giá, phân loại
-                    và tồn kho từ danh mục Firestore; sau đó khách mới xem được QR hoặc
-                    số tiền COD.
+                    Giá QR khách đã thấy là giá tham khảo. Bấm duyệt để lấy giá, phân
+                    loại và tồn kho từ danh mục Firestore; hãy đối chiếu đúng số tiền
+                    vào tài khoản ngân hàng trước khi xác nhận thanh toán thành công.
                   </p>
                   <button
                     type="button"
@@ -2297,8 +2490,18 @@ export function AdminDashboard({
                 </div>
               )}
               {inspectingOrder.paymentMethod === 'vietqr' &&
-                inspectingOrder.paymentStatus === 'awaiting_confirmation' && (
+                inspectingOrder.paymentStatus === 'awaiting_confirmation' &&
+                inspectingOrder.orderStatus !== 'Chờ duyệt giá và tồn kho' && (
                   <div className="space-y-2">
+                    {inspectingOrder.quotedTotal !== undefined &&
+                      inspectingOrder.quotedTotal !== inspectingOrder.total && (
+                        <p className="rounded-lg bg-[#FFF2D8] px-3.5 py-2.5 text-xs leading-relaxed text-[#6D4A12]">
+                          Khách đã thấy QR tạm tính{' '}
+                          {formatVND(inspectingOrder.quotedTotal)}; tổng theo
+                          catalog hiện tại là {formatVND(inspectingOrder.total)}.
+                          Chỉ xác nhận khi số tiền thực nhận trong ngân hàng khớp.
+                        </p>
+                      )}
                     <button
                       type="button"
                       disabled={paymentConfirming}
@@ -2383,7 +2586,8 @@ export function AdminDashboard({
                     (variant) => variant.id === item.variantId
                   );
                   const awaitingPriceApproval =
-                    inspectingOrder.paymentStatus === 'awaiting_admin_review';
+                    inspectingOrder.orderStatus ===
+                    'Chờ duyệt giá và tồn kho';
                   return (
                     <div
                       key={`${item.productId}-${idx}`}
@@ -2410,7 +2614,7 @@ export function AdminDashboard({
                     </div>
                   );
                 })}
-                {inspectingOrder.paymentStatus === 'awaiting_admin_review' ? (
+                {inspectingOrder.orderStatus === 'Chờ duyệt giá và tồn kho' ? (
                   <p className="py-3 text-xs text-[#867363]">
                     Tổng tiền sẽ được tính từ danh mục khi admin duyệt đơn.
                   </p>

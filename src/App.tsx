@@ -24,6 +24,7 @@ import { SITE_CONFIG } from './config/site';
 import {
   confirmStoreOrderPayment,
   approveStoreOrder,
+  clearAllStoreOrders,
   createStoreOrder,
   deleteStoreProduct,
   fetchAdminOrders,
@@ -354,8 +355,15 @@ export default function App() {
       if (order.customerUid !== customer.uid) continue;
       const previous = previousStates.get(order.orderNumber);
       if (previous && previous.paymentStatus !== order.paymentStatus) {
-        if (order.paymentStatus === 'Đã xác nhận chuyển khoản') {
+        if (order.paymentStatus === 'paid') {
           notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber}: quản trị viên đã xác nhận thanh toán.`;
+        } else if (order.paymentStatus === 'awaiting_confirmation') {
+          notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber}: cửa hàng đang đối chiếu giao dịch.`;
+        } else if (
+          order.paymentStatus === 'pending_payment' &&
+          previous.paymentStatus === 'awaiting_confirmation'
+        ) {
+          notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber}: giao dịch chưa được xác nhận. Kiểm tra ghi chú trong lịch sử đơn hàng.`;
         }
       } else if (previous && previous.orderStatus !== order.orderStatus) {
         notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber} cập nhật: ${order.orderStatus}.`;
@@ -374,6 +382,18 @@ export default function App() {
     const timeoutId = window.setTimeout(() => setOrderNotice(null), 8000);
     return () => window.clearTimeout(timeoutId);
   }, [orderNotice]);
+
+  useEffect(() => {
+    if (!drawerOpen || drawerStep !== 'receipt' || !initialReceiptOrder) return;
+    const currentOrder = orders.find(
+      (order) => order.orderNumber === initialReceiptOrder.orderNumber
+    );
+    if (currentOrder?.paymentStatus !== 'paid') return;
+
+    setDrawerOpen(false);
+    setDrawerStep('cart');
+    setInitialReceiptOrder(null);
+  }, [drawerOpen, drawerStep, initialReceiptOrder, orders]);
 
   useEffect(() => {
     let active = true;
@@ -547,6 +567,17 @@ export default function App() {
     note?: string
   ) => {
     await confirmStoreOrderPayment(orderNumber, received, note);
+    setOrders((prev) =>
+      prev.map((order) =>
+        order.orderNumber === orderNumber
+          ? {
+              ...order,
+              paymentStatus: received ? 'paid' : 'pending_payment',
+              ...(received ? {} : { paymentNote: note }),
+            }
+          : order
+      )
+    );
     setAdminOrders((prev) =>
       prev.map((order) =>
         order.orderNumber === orderNumber
@@ -558,6 +589,12 @@ export default function App() {
           : order
       )
     );
+  };
+
+  const handleClearAllOrders = async () => {
+    await clearAllStoreOrders();
+    setOrders([]);
+    setAdminOrders([]);
   };
 
   const handleApproveOrder = async (orderNumber: string): Promise<Order> => {
@@ -697,6 +734,7 @@ export default function App() {
           onUpdateOrderStatus={handleUpdateOrderStatus}
           onConfirmOrderPayment={handleConfirmOrderPayment}
           onApproveOrder={handleApproveOrder}
+          onClearAllOrders={handleClearAllOrders}
         />
       </Suspense>
     );

@@ -121,6 +121,14 @@ export function CartCheckoutDrawer({
         (order) => order.orderNumber === latestOrder.orderNumber
       ) ?? latestOrder
     : null;
+  const receiptTotal =
+    receiptOrder?.orderStatus === 'Chờ duyệt giá và tồn kho'
+      ? receiptOrder.quotedTotal ?? 0
+      : receiptOrder?.total ?? 0;
+
+  useEffect(() => {
+    setQrImageFailed(false);
+  }, [receiptOrder?.orderNumber, receiptTotal]);
 
   useEffect(() => {
     if (!customer) return;
@@ -370,9 +378,13 @@ export function CartCheckoutDrawer({
 
   const handleCopyTransfer = async (order: Order) => {
     if (!order.paymentReference) return;
+    const amount =
+      order.orderStatus === 'Chờ duyệt giá và tồn kho'
+        ? order.quotedTotal ?? 0
+        : order.total;
     await handleCopyValue(
       'transfer',
-      `${VIETQR_BANK_NAME} - ${VIETQR_ACCOUNT_NUMBER} - ${VIETQR_ACCOUNT_NAME} - ${order.total} - ${order.paymentReference}`
+      `${VIETQR_BANK_NAME} - ${VIETQR_ACCOUNT_NUMBER} - ${VIETQR_ACCOUNT_NAME} - ${amount} - ${order.paymentReference}`
     );
   };
 
@@ -1078,12 +1090,26 @@ export function CartCheckoutDrawer({
           {step === 'receipt' && receiptOrder && (
             <div className="space-y-6 py-2">
               <div className="p-5 rounded-xl bg-[#F8F4EE] border border-[#E2D7C6] space-y-3">
-                <div className="flex items-center gap-2.5 text-[#3F5E3B]">
-                  <CheckCircle2 className="w-6 h-6 shrink-0" />
+                <div
+                  className={`flex items-center gap-2.5 ${
+                    receiptOrder.paymentStatus === 'paid'
+                      ? 'text-[#3F5E3B]'
+                      : 'text-[#073D63]'
+                  }`}
+                >
+                  {receiptOrder.paymentStatus === 'paid' ? (
+                    <CheckCircle2 className="w-6 h-6 shrink-0 text-[#3F5E3B]" />
+                  ) : (
+                    <QrCode className="w-6 h-6 shrink-0 text-[#073D63]" />
+                  )}
                   <div>
                     <p className="text-xs font-medium uppercase tracking-wide">
                       {receiptOrder.paymentStatus === 'awaiting_admin_review'
-                        ? 'Chờ cửa hàng xác nhận đơn'
+                        ? 'Chờ xác nhận đơn'
+                        : receiptOrder.paymentStatus === 'pending_payment'
+                          ? 'Chờ thanh toán'
+                          : receiptOrder.paymentStatus === 'awaiting_confirmation'
+                            ? 'Đang xác minh chuyển khoản'
                         : receiptOrder.paymentStatus === 'paid'
                           ? 'Đã thanh toán'
                           : receiptOrder.paymentStatus}
@@ -1113,21 +1139,29 @@ export function CartCheckoutDrawer({
                 </p>
               </div>
 
-              {receiptOrder.paymentStatus === 'awaiting_admin_review' && (
+              {receiptOrder.orderStatus === 'Chờ duyệt giá và tồn kho' && (
                 <div className="rounded-xl border border-[#E2D7C6] bg-[#F8F4EE] p-4 text-sm leading-relaxed text-[#5E4B3C]">
-                  Cửa hàng đang xác minh sản phẩm, tồn kho và tổng tiền từ danh mục.
-                  Chưa cần thanh toán; trạng thái đơn sẽ cập nhật trực tiếp tại đây
-                  khi admin xác nhận.
+                  {receiptOrder.paymentMethod === 'vietqr'
+                    ? `Quét mã QR để chuyển ${formatVND(receiptTotal)} với nội dung mã đơn bên dưới. Sau khi chuyển, bấm “Tôi đã chuyển khoản”; cửa hàng sẽ xác minh giao dịch và đối chiếu lại giá/tồn kho trước khi duyệt.`
+                    : 'Đơn COD đang chờ cửa hàng xác minh sản phẩm, tồn kho và tổng tiền. Bạn chưa cần thanh toán lúc này.'}
                 </div>
               )}
 
-              {receiptOrder.paymentMethod === 'vietqr' &&
-                receiptOrder.paymentStatus !== 'awaiting_admin_review' && (
+              {receiptOrder.paymentMethod === 'vietqr' && (
                 <div className="rounded-xl border border-[#E2D7C6] bg-[#F8F4EE] p-4">
+                  {receiptOrder.paymentStatus === 'paid' && (
+                    <p
+                      role="status"
+                      className="mb-4 flex items-center justify-center gap-2 text-sm font-semibold text-[#3F5E3B]"
+                    >
+                      <CheckCircle2 className="h-5 w-5" />
+                      Đã nhận thanh toán
+                    </p>
+                  )}
                   <div className="flex flex-col items-center gap-4 sm:flex-row">
                     {!qrImageFailed && receiptOrder.paymentReference ? (
                       <img
-                        src={`https://img.vietqr.io/image/${encodeURIComponent(VIETQR_BANK_BIN)}-${encodeURIComponent(VIETQR_ACCOUNT_NUMBER)}-compact2.png?amount=${Math.round(receiptOrder.total)}&addInfo=${encodeURIComponent(receiptOrder.paymentReference)}&accountName=${encodeURIComponent(VIETQR_ACCOUNT_NAME)}`}
+                        src={`https://img.vietqr.io/image/${encodeURIComponent(VIETQR_BANK_BIN)}-${encodeURIComponent(VIETQR_ACCOUNT_NUMBER)}-compact2.png?amount=${Math.round(receiptTotal)}&addInfo=${encodeURIComponent(receiptOrder.paymentReference)}&accountName=${encodeURIComponent(VIETQR_ACCOUNT_NAME)}`}
                         alt="Mã QR chuyển khoản VietQR"
                         onError={() => setQrImageFailed(true)}
                         className="h-40 w-40 shrink-0 rounded-lg border border-[#E2D7C6] bg-white object-contain p-2"
@@ -1189,7 +1223,7 @@ export function CartCheckoutDrawer({
                       <p>
                         Số tiền:{' '}
                         <strong className="text-[#073D63]">
-                          {formatVND(receiptOrder.total)}
+                          {formatVND(receiptTotal)}
                         </strong>
                       </p>
                       <p className="font-mono text-[#2B2018]">
@@ -1232,10 +1266,12 @@ export function CartCheckoutDrawer({
                         {receiptOrder.paymentStatus === 'paid'
                           ? 'Giao dịch đã được cửa hàng xác nhận.'
                           : receiptOrder.paymentStatus === 'awaiting_confirmation'
-                            ? 'Cửa hàng đang đối chiếu giao dịch. Trạng thái sẽ cập nhật tại đây.'
-                            : 'Sau khi chuyển khoản, hãy bấm “Tôi đã thanh toán” để cửa hàng kiểm tra giao dịch.'}
+                            ? 'Cửa hàng đang kiểm tra tài khoản ngân hàng và đối chiếu đơn hàng.'
+                            : 'Quét mã QR, chuyển khoản đúng số tiền và bấm nút xác nhận bên dưới.'}
                       </p>
-                      {receiptOrder.paymentStatus === 'pending_payment' && (
+                      {['pending_payment', 'awaiting_admin_review'].includes(
+                        receiptOrder.paymentStatus
+                      ) && (
                         <button
                           type="button"
                           disabled={paymentSubmitting}
@@ -1299,14 +1335,17 @@ export function CartCheckoutDrawer({
                         </p>
                       </div>
                       <span className="font-semibold text-[#2B2018] tabular-nums shrink-0">
-                        {formatVND(item.unitPrice * item.quantity)}
+                        {receiptOrder.orderStatus ===
+                        'Chờ duyệt giá và tồn kho'
+                          ? 'Chờ cửa hàng xác nhận giá'
+                          : formatVND(item.unitPrice * item.quantity)}
                       </span>
                     </div>
                   ))}
                   <div className="py-3 flex items-center justify-between text-sm font-semibold text-[#2B2018]">
                     <span>Tổng thanh toán</span>
                     <span className="text-[#073D63] tabular-nums">
-                      {formatVND(receiptOrder.total)}
+                      {formatVND(receiptTotal)}
                     </span>
                   </div>
                 </div>

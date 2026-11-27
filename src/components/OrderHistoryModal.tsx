@@ -109,15 +109,25 @@ export function OrderHistoryModal({
                       Đặt lúc {formatOrderDate(order.createdAt)}
                     </p>
                   </div>
-                  <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#3F5E3B]">
-                    <CheckCircle2 className="w-4 h-4" />
+                  <div
+                    className={`inline-flex items-center gap-1.5 text-xs font-medium ${
+                      order.paymentStatus === 'paid'
+                        ? 'text-[#3F5E3B]'
+                        : 'text-[#073D63]'
+                    }`}
+                  >
+                    {order.paymentStatus === 'paid' ? (
+                      <CheckCircle2 className="w-4 h-4" />
+                    ) : (
+                      <PackageCheck className="w-4 h-4" />
+                    )}
                     <span>
                       {order.paymentStatus === 'awaiting_admin_review'
                         ? 'Chờ cửa hàng xác nhận giá và tồn kho'
                         : order.paymentStatus === 'pending_payment'
                         ? 'Chờ thanh toán'
                         : order.paymentStatus === 'awaiting_confirmation'
-                          ? 'Chờ cửa hàng xác nhận'
+                          ? 'Đã báo chuyển khoản · chờ admin'
                           : order.paymentStatus === 'paid'
                             ? 'Đã thanh toán'
                             : order.paymentStatus}
@@ -134,7 +144,7 @@ export function OrderHistoryModal({
                       <span className="text-[#2B2018]">
                         {item.name} ({item.variantLabel}) × {item.quantity}
                       </span>
-                      {order.paymentStatus !== 'awaiting_admin_review' && (
+                      {order.orderStatus !== 'Chờ duyệt giá và tồn kho' && (
                         <span className="tabular-nums font-medium text-[#2B2018] shrink-0">
                           {formatVND(item.unitPrice * item.quantity)}
                         </span>
@@ -188,7 +198,7 @@ export function OrderHistoryModal({
                       ? ` · Dự kiến ${order.estimatedDelivery}`
                       : ' · Chờ xác nhận thời gian giao'}
                   </span>
-                  {order.paymentStatus === 'awaiting_admin_review' ? (
+                  {order.orderStatus === 'Chờ duyệt giá và tồn kho' ? (
                     <span className="text-xs text-[#867363]">
                       Cửa hàng sẽ xác nhận giá và tồn kho trước khi thanh toán.
                     </span>

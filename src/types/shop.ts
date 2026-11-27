@@ -154,6 +154,10 @@ export interface Order {
   discount: number;
   shippingFee: number;
   total: number;
+  quotedSubtotal?: number;
+  quotedDiscount?: number;
+  quotedShippingFee?: number;
+  quotedTotal?: number;
   promoCode?: string;
   items: OrderItemSnapshot[];
 }
