@@ -41,6 +41,8 @@ import {
   observeCustomerSession,
   signOutCustomer,
 } from './services/customerRepository';
+import { observeAdminAuthorization } from './services/adminRepository';
+import type { AdminAuthorization } from './services/adminRepository';
 import { initializeFirebaseAnalytics } from './services/firebaseConfig';
 import {
   CartItem,
@@ -58,6 +60,11 @@ type AppRoute =
   | { type: 'product'; slug: string }
   | { type: 'admin' }
   | { type: 'not-found' };
+type AdminAuthorizationState =
+  | 'inactive'
+  | 'checking'
+  | AdminAuthorization
+  | 'error';
 
 const AdminDashboard = lazy(() =>
   import('./components/AdminDashboard').then(({ AdminDashboard: component }) => ({
@@ -100,9 +107,15 @@ export default function App() {
     () => (parseAppRoute(window.location.pathname).type === 'admin' ? 'admin' : 'store')
   );
   const [adminUnlocked, setAdminUnlocked] = useState(false);
-  const [accountModalOpen, setAccountModalOpen] = useState(
-    () => parseAppRoute(window.location.pathname).type === 'admin'
-  );
+  const [adminAuthorization, setAdminAuthorization] =
+    useState<AdminAuthorizationState>(() =>
+      parseAppRoute(window.location.pathname).type === 'admin'
+        ? 'checking'
+        : 'inactive'
+    );
+  const [adminAuthorizationError, setAdminAuthorizationError] = useState<string | null>(null);
+  const [adminAuthorizationRetry, setAdminAuthorizationRetry] = useState(0);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
 
   const [bannerVisible, setBannerVisible] = useState(true);
@@ -113,6 +126,7 @@ export default function App() {
   const [ordersModalOpen, setOrdersModalOpen] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const adminInitialization = useRef<Promise<void> | null>(null);
   const route = parseAppRoute(pathname);
 
   const navigateTo = (path: string, replace = false) => {
@@ -159,18 +173,44 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const currentRoute = parseAppRoute(pathname);
-    if (currentRoute.type === 'admin') {
+    if (route.type === 'admin') {
       setView('admin');
       setSelectedProduct(null);
-      if (!adminUnlocked) setAccountModalOpen(true);
+      setAccountModalOpen(false);
       return;
     }
 
     setView('store');
     setAccountModalOpen(false);
-    if (currentRoute.type !== 'product') setSelectedProduct(null);
-  }, [adminUnlocked, pathname]);
+    setAdminUnlocked(false);
+    setAdminAuthorization('inactive');
+    setAdminAuthorizationError(null);
+    if (route.type !== 'product') setSelectedProduct(null);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (parseAppRoute(pathname).type !== 'admin') return;
+
+    setAdminAuthorization('checking');
+    setAdminAuthorizationError(null);
+    return observeAdminAuthorization(
+      (authorization) => {
+        setAdminAuthorization(authorization);
+        if (authorization === 'unauthorized') {
+          setAdminUnlocked(false);
+          setAdminOrders([]);
+          setAccountModalOpen(true);
+        } else {
+          setAccountModalOpen(false);
+        }
+      },
+      (error) => {
+        console.error('Không thể xác minh quyền quản trị:', error);
+        setAdminAuthorizationError(error.message);
+        setAdminAuthorization('error');
+      }
+    );
+  }, [adminAuthorizationRetry, pathname]);
 
   useEffect(() => {
     const currentRoute = parseAppRoute(pathname);
@@ -469,23 +509,53 @@ export default function App() {
   };
 
   const handleAdminAuthenticated = async () => {
-    try {
+    if (adminInitialization.current) {
+      await adminInitialization.current;
+      return;
+    }
+
+    const initialization = (async () => {
       const [loadedProducts, loadedOrders] = await Promise.all([
-          initializeAdminProducts(),
-          fetchAdminOrders(),
+        initializeAdminProducts(),
+        fetchAdminOrders(),
       ]);
       setProducts(loadedProducts);
       setAdminOrders(loadedOrders);
       setAdminUnlocked(true);
+      setAdminAuthorization('authorized');
+      setAdminAuthorizationError(null);
       setAccountModalOpen(false);
       setView('admin');
       navigateTo('/admin');
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (error) {
-      await signOutCustomer();
-      throw error;
+    })();
+    adminInitialization.current = initialization;
+    try {
+      await initialization;
+    } finally {
+      if (adminInitialization.current === initialization) {
+        adminInitialization.current = null;
+      }
     }
   };
+
+  useEffect(() => {
+    if (
+      parseAppRoute(pathname).type !== 'admin' ||
+      adminAuthorization !== 'authorized' ||
+      adminUnlocked
+    ) {
+      return;
+    }
+
+    void handleAdminAuthenticated().catch((error: unknown) => {
+      console.error('Không thể tải dữ liệu quản trị:', error);
+      setAdminAuthorizationError(
+        error instanceof Error ? error.message : 'Không thể tải dữ liệu quản trị.'
+      );
+      setAdminAuthorization('error');
+    });
+  }, [adminAuthorization, adminUnlocked, pathname]);
 
   const handleAdminExit = async () => {
     await signOutCustomer();
@@ -555,6 +625,39 @@ export default function App() {
           onConfirmOrderPayment={handleConfirmOrderPayment}
         />
       </Suspense>
+    );
+  }
+
+  if (
+    route.type === 'admin' &&
+    (adminAuthorization === 'checking' ||
+      (adminAuthorization === 'authorized' && !adminUnlocked))
+  ) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center bg-[#F8F4EE] text-sm text-[#5E4B3C]"
+        role="status"
+      >
+        Đang xác minh và tải trang quản trị...
+      </div>
+    );
+  }
+
+  if (route.type === 'admin' && adminAuthorization === 'error') {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-[#F8F4EE] px-4 text-center text-[#2B2018]">
+        <h1 className="text-xl font-semibold">Không thể xác minh quyền quản trị</h1>
+        <p role="alert" className="mt-2 max-w-lg text-sm text-[#5E4B3C]">
+          {adminAuthorizationError}
+        </p>
+        <button
+          type="button"
+          onClick={() => setAdminAuthorizationRetry((retry) => retry + 1)}
+          className="mt-6 rounded-lg bg-[#073D63] px-5 py-2.5 text-sm font-medium text-[#FCF9F5]"
+        >
+          Thử lại
+        </button>
+      </main>
     );
   }
 
