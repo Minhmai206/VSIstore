@@ -2,13 +2,12 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   getDocsFromServer,
   onSnapshot,
-  query,
   setDoc,
   updateDoc,
-  where,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { INITIAL_ORDERS } from '../data/products';
@@ -21,7 +20,125 @@ import {
 
 const ORDERS_STORAGE_KEY = 'moc_dat_orders_v1';
 const PRODUCTS_STORAGE_KEY = 'moc_dat_products_v1';
+const CUSTOMER_ORDER_IDS_STORAGE_KEY = 'moc_dat_customer_order_ids_v1';
+const PENDING_CUSTOMER_ORDER_STORAGE_KEY = 'moc_dat_pending_customer_order_v1';
+const customerOrderObservers = new Map<string, Set<(orderNumber: string) => void>>();
 export type StorageBackendMode = 'firebase' | 'localhost';
+
+function customerOrderIdsKey(customerUid: string): string {
+  return `${CUSTOMER_ORDER_IDS_STORAGE_KEY}_${customerUid}`;
+}
+
+function pendingCustomerOrderKey(customerUid: string): string {
+  return `${PENDING_CUSTOMER_ORDER_STORAGE_KEY}_${customerUid}`;
+}
+
+function rememberCustomerOrderId(customerUid: string, orderNumber: string): void {
+  let validOrderNumbers: string[] = [];
+  try {
+    const stored = localStorage.getItem(customerOrderIdsKey(customerUid));
+    const orderNumbers = stored ? (JSON.parse(stored) as unknown) : [];
+    validOrderNumbers = Array.isArray(orderNumbers)
+      ? orderNumbers.filter(
+          (value): value is string =>
+            typeof value === 'string' &&
+            (/^VSI-[a-f0-9]{32}$/i.test(value) ||
+              /^VSI-\d{13}-\d{4}$/i.test(value))
+        )
+      : [];
+    if (!validOrderNumbers.includes(orderNumber)) {
+      localStorage.setItem(
+        customerOrderIdsKey(customerUid),
+        JSON.stringify([...validOrderNumbers, orderNumber])
+      );
+    }
+  } catch (error) {
+    console.warn('Could not persist the customer order ID.', error);
+  }
+  customerOrderObservers
+    .get(customerUid)
+    ?.forEach((subscribeToOrder) => subscribeToOrder(orderNumber));
+}
+
+function getKnownCustomerOrderIds(customerUid: string): string[] {
+  try {
+    const stored = localStorage.getItem(customerOrderIdsKey(customerUid));
+    const orderNumbers: unknown = stored ? JSON.parse(stored) : [];
+    const validOrderNumbers = new Set(
+      Array.isArray(orderNumbers)
+        ? orderNumbers.filter(
+            (value): value is string =>
+              typeof value === 'string' &&
+              (/^VSI-[a-f0-9]{32}$/i.test(value) ||
+                /^VSI-\d{13}-\d{4}$/i.test(value))
+          )
+        : []
+    );
+    for (const order of readLocalOrders()) {
+      if (order.customerUid === customerUid) validOrderNumbers.add(order.orderNumber);
+    }
+    const result = [...validOrderNumbers];
+    localStorage.setItem(customerOrderIdsKey(customerUid), JSON.stringify(result));
+    return result;
+  } catch (error) {
+    console.warn('Could not read the customer order IDs.', error);
+    return [];
+  }
+}
+
+export function readPendingCustomerOrderNumber(customerUid: string): string | null {
+  try {
+    return localStorage.getItem(pendingCustomerOrderKey(customerUid));
+  } catch (error) {
+    console.warn('Could not read the pending customer order ID.', error);
+    return null;
+  }
+}
+
+function rememberPendingCustomerOrder(order: Order): void {
+  if (
+    !order.customerUid ||
+    order.paymentMethod !== 'vietqr' ||
+    order.paymentStatus === 'paid'
+  ) return;
+  try {
+    localStorage.setItem(
+      pendingCustomerOrderKey(order.customerUid),
+      order.orderNumber
+    );
+  } catch (error) {
+    console.warn('Could not persist the pending customer order ID.', error);
+  }
+}
+
+function clearPendingCustomerOrderIfResolved(order: Order): void {
+  if (!order.customerUid) return;
+  if (
+    order.paymentStatus !== 'paid' &&
+    order.orderStatus !== 'Hoàn tất' &&
+    order.orderStatus !== 'Đã hủy'
+  ) {
+    return;
+  }
+  try {
+    if (
+      readPendingCustomerOrderNumber(order.customerUid) === order.orderNumber
+    ) {
+      localStorage.removeItem(pendingCustomerOrderKey(order.customerUid));
+    }
+  } catch (error) {
+    console.warn('Could not clear the resolved customer order ID.', error);
+  }
+}
+
+function saveLocalOrder(order: Order): void {
+  writeLocalOrders([
+    order,
+    ...readLocalOrders().filter(
+      (cachedOrder) => cachedOrder.orderNumber !== order.orderNumber
+    ),
+  ]);
+}
 
 function isCachedProduct(value: unknown): value is Product {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -156,12 +273,20 @@ export async function fetchCustomerOrders(customerUid: string): Promise<Order[]>
     );
   }
 
-  const ordersQuery = query(
-    collection(db, 'orders'),
-    where('customerUid', '==', customerUid)
+  const orderNumbers = getKnownCustomerOrderIds(customerUid);
+  const snapshots = await Promise.all(
+    orderNumbers.map((orderNumber) =>
+      getDoc(doc(db, 'orders', orderNumber))
+    )
   );
-  const snapshot = await getDocs(ordersQuery);
-  return sortOrders(snapshot.docs.map((item) => item.data() as Order));
+  return sortOrders(
+    snapshots
+      .filter(
+        (snapshot) =>
+          snapshot.exists() && snapshot.data().customerUid === customerUid
+      )
+      .map((snapshot) => snapshot.data() as Order)
+  );
 }
 
 export function observeCustomerOrders(
@@ -179,16 +304,41 @@ export function observeCustomerOrders(
     return () => {};
   }
 
-  const ordersQuery = query(
-    collection(db, 'orders'),
-    where('customerUid', '==', customerUid)
-  );
-  return onSnapshot(
-    ordersQuery,
-    (snapshot) =>
-      onOrders(sortOrders(snapshot.docs.map((item) => item.data() as Order))),
-    onError
-  );
+  const ordersByNumber = new Map<string, Order>();
+  const subscriptions = new Map<string, () => void>();
+  const emitOrders = () => onOrders(sortOrders([...ordersByNumber.values()]));
+  const subscribeToOrder = (orderNumber: string) => {
+    if (subscriptions.has(orderNumber)) return;
+    subscriptions.set(
+      orderNumber,
+      onSnapshot(
+        doc(db, 'orders', orderNumber),
+        (snapshot) => {
+          if (!snapshot.exists() || snapshot.data().customerUid !== customerUid) {
+            ordersByNumber.delete(orderNumber);
+            emitOrders();
+            return;
+          }
+          const order = snapshot.data() as Order;
+          ordersByNumber.set(orderNumber, order);
+          saveLocalOrder(order);
+          clearPendingCustomerOrderIfResolved(order);
+          emitOrders();
+        },
+        onError
+      )
+    );
+  };
+  const observerSet = customerOrderObservers.get(customerUid) ?? new Set();
+  observerSet.add(subscribeToOrder);
+  customerOrderObservers.set(customerUid, observerSet);
+  getKnownCustomerOrderIds(customerUid).forEach(subscribeToOrder);
+  emitOrders();
+  return () => {
+    observerSet.delete(subscribeToOrder);
+    if (observerSet.size === 0) customerOrderObservers.delete(customerUid);
+    subscriptions.forEach((unsubscribe) => unsubscribe());
+  };
 }
 
 export async function fetchAdminOrders(): Promise<Order[]> {
@@ -233,6 +383,8 @@ export async function createStoreOrder(order: Order): Promise<Order> {
       throw new Error('Dịch vụ tạo đơn Firebase chưa được cấu hình.');
     }
     writeLocalOrders([order, ...readLocalOrders()]);
+    rememberCustomerOrderId(order.customerUid, order.orderNumber);
+    rememberPendingCustomerOrder(order);
     return order;
   }
 
@@ -258,13 +410,29 @@ export async function createStoreOrder(order: Order): Promise<Order> {
   );
   const { data: savedOrder } = await createCustomerOrder(orderInput);
 
-  writeLocalOrders([
-    savedOrder,
-    ...readLocalOrders().filter(
-      (cachedOrder) => cachedOrder.orderNumber !== savedOrder.orderNumber
-    ),
-  ]);
+  saveLocalOrder(savedOrder);
+  if (!savedOrder.customerUid) {
+    throw new Error('Đơn hàng trả về không có mã tài khoản khách hàng.');
+  }
+  rememberCustomerOrderId(savedOrder.customerUid, savedOrder.orderNumber);
+  rememberPendingCustomerOrder(savedOrder);
   return savedOrder;
+}
+
+export async function submitCustomerOrderPayment(
+  orderNumber: string
+): Promise<void> {
+  const db = getFirestoreInstance();
+  if (db) {
+    await updateDoc(doc(db, 'orders', orderNumber), {
+      paymentStatus: 'awaiting_confirmation',
+      paymentSubmittedAt: new Date().toISOString(),
+    });
+  }
+  const order = readLocalOrders().find(
+    (cachedOrder) => cachedOrder.orderNumber === orderNumber
+  );
+  if (order) saveLocalOrder({ ...order, paymentStatus: 'awaiting_confirmation' });
 }
 
 export async function updateStoreOrderStatus(
@@ -284,17 +452,45 @@ export async function updateStoreOrderStatus(
 }
 
 export async function confirmStoreOrderPayment(
-  orderNumber: string
+  orderNumber: string,
+  received: boolean,
+  note?: string
 ): Promise<void> {
-  const paymentStatus = 'Đã xác nhận chuyển khoản' as const;
-  const db = getFirestoreInstance();
-  if (db) {
-    await updateDoc(doc(db, 'orders', orderNumber), { paymentStatus });
+  const functions = getFirebaseFunctionsInstance();
+  if (!functions) {
+    if (getFirestoreInstance()) {
+      throw new Error('Dịch vụ xác nhận thanh toán Firebase chưa được cấu hình.');
+    }
+    const order = readLocalOrders().find(
+      (cachedOrder) => cachedOrder.orderNumber === orderNumber
+    );
+    if (!order) throw new Error('Không tìm thấy đơn hàng cần cập nhật.');
+    const paymentStatus = received ? 'paid' : 'pending_payment';
+    saveLocalOrder({
+      ...order,
+      paymentStatus,
+      ...(received ? { paymentNote: undefined } : { paymentNote: note }),
+    });
+    return;
   }
 
-  writeLocalOrders(
-    readLocalOrders().map((order) =>
-      order.orderNumber === orderNumber ? { ...order, paymentStatus } : order
-    )
+  const confirmPayment = httpsCallable<
+    { orderNumber: string; received: boolean; note?: string },
+    { orderNumber: string; paymentStatus: Order['paymentStatus'] }
+  >(functions, 'confirmCustomerOrderPayment');
+  const { data } = await confirmPayment({
+    orderNumber,
+    received,
+    ...(note ? { note } : {}),
+  });
+  const order = readLocalOrders().find(
+    (cachedOrder) => cachedOrder.orderNumber === orderNumber
   );
+  if (order) {
+    saveLocalOrder({
+      ...order,
+      paymentStatus: data.paymentStatus,
+      ...(received ? { paymentNote: undefined } : { paymentNote: note }),
+    });
+  }
 }

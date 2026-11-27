@@ -1,4 +1,4 @@
-import { SyntheticEvent, useId, useMemo, useRef, useState } from 'react';
+import { SyntheticEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -14,6 +14,7 @@ import {
   Search,
   Settings,
   Trash2,
+  Users,
   Upload,
   X,
 } from 'lucide-react';
@@ -40,7 +41,7 @@ import {
 } from '../utils/format';
 import { ResilientImage } from './ResilientImage';
 
-type AdminTab = 'overview' | 'products' | 'orders' | 'settings';
+type AdminTab = 'overview' | 'products' | 'orders' | 'customers' | 'settings';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -53,7 +54,11 @@ interface AdminDashboardProps {
     orderNumber: string,
     status: OrderStatus
   ) => Promise<void> | void;
-  onConfirmOrderPayment: (orderNumber: string) => Promise<void> | void;
+  onConfirmOrderPayment: (
+    orderNumber: string,
+    received: boolean,
+    note?: string
+  ) => Promise<void> | void;
 }
 
 const ORDER_STATUS_OPTIONS: OrderStatus[] = [
@@ -200,6 +205,10 @@ export function AdminDashboard({
     useState<string>('Tất Cả');
   const [orderQuery, setOrderQuery] = useState('');
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>('Tất cả');
+  const [orderDateFrom, setOrderDateFrom] = useState('');
+  const [orderDateTo, setOrderDateTo] = useState('');
+  const [orderPage, setOrderPage] = useState(1);
+  const ORDERS_PAGE_SIZE = 20;
 
   const [editingProductModalOpen, setEditingProductModalOpen] = useState(false);
   const [productForm, setProductForm] = useState<DetailedProductFormState>(() =>
@@ -209,6 +218,7 @@ export function AdminDashboard({
   const [productActionError, setProductActionError] = useState('');
   const [orderActionError, setOrderActionError] = useState('');
   const [paymentConfirming, setPaymentConfirming] = useState(false);
+  const [paymentRejectionNote, setPaymentRejectionNote] = useState('');
   const [uploadingImages, setUploadingImages] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -284,13 +294,61 @@ export function AdminDashboard({
       if (orderStatusFilter !== 'Tất cả' && o.orderStatus !== orderStatusFilter) {
         return false;
       }
+      if (orderDateFrom) {
+        const createdDate = o.createdAt.slice(0, 10);
+        if (createdDate < orderDateFrom) return false;
+      }
+      if (orderDateTo) {
+        const createdDate = o.createdAt.slice(0, 10);
+        if (createdDate > orderDateTo) return false;
+      }
       if (!q) return true;
       const hay = removeVietnameseDiacritics(
         `${o.orderNumber} ${o.customerName} ${o.phone} ${o.city}`
       );
       return hay.includes(q);
     });
-  }, [orders, orderQuery, orderStatusFilter]);
+  }, [orders, orderQuery, orderStatusFilter, orderDateFrom, orderDateTo]);
+
+  useEffect(() => {
+    setOrderPage(1);
+  }, [orderQuery, orderStatusFilter, orderDateFrom, orderDateTo]);
+
+  const pagedOrders = useMemo(() => {
+    const start = (orderPage - 1) * ORDERS_PAGE_SIZE;
+    return filteredOrders.slice(start, start + ORDERS_PAGE_SIZE);
+  }, [filteredOrders, orderPage]);
+  const totalOrderPages = Math.max(
+    1,
+    Math.ceil(filteredOrders.length / ORDERS_PAGE_SIZE)
+  );
+  const customers = useMemo(() => {
+    const grouped = new Map<
+      string,
+      { key: string; name: string; phone: string; email: string; orders: number; total: number }
+    >();
+    for (const order of orders) {
+      const key =
+        order.email.trim().toLowerCase() ||
+        order.phone.replace(/\s+/g, '');
+      if (!key) continue;
+      const current = grouped.get(key);
+      if (current) {
+        current.orders += 1;
+        current.total += order.total;
+      } else {
+        grouped.set(key, {
+          key,
+          name: order.customerName,
+          phone: order.phone,
+          email: order.email,
+          orders: 1,
+          total: order.total,
+        });
+      }
+    }
+    return [...grouped.values()].sort((a, b) => b.total - a.total);
+  }, [orders]);
 
   const openCreateProduct = () => {
     setProductForm(createEmptyProductForm(products.length + 1));
@@ -372,16 +430,28 @@ export function AdminDashboard({
     }
   };
 
-  const handleConfirmOrderPayment = async (orderNumber: string) => {
+  const handleConfirmOrderPayment = async (
+    orderNumber: string,
+    received: boolean
+  ) => {
     setOrderActionError('');
     setPaymentConfirming(true);
     try {
-      await onConfirmOrderPayment(orderNumber);
+      await onConfirmOrderPayment(
+        orderNumber,
+        received,
+        received ? undefined : paymentRejectionNote
+      );
       setInspectingOrder((current) =>
         current
-          ? { ...current, paymentStatus: 'Đã xác nhận chuyển khoản' }
+          ? {
+              ...current,
+              paymentStatus: received ? 'paid' : 'pending_payment',
+              ...(received ? {} : { paymentNote: paymentRejectionNote }),
+            }
           : current
       );
+      setPaymentRejectionNote('');
     } catch (error) {
       setOrderActionError(
         error instanceof Error
@@ -600,6 +670,7 @@ export function AdminDashboard({
     overview: 'Tổng quan hoạt động',
     products: 'Quản lý sản phẩm chi tiết',
     orders: 'Đơn hàng & Thanh toán',
+    customers: 'Danh sách khách hàng',
     settings: 'Cài đặt bảo mật & Firebase',
   };
 
@@ -670,6 +741,19 @@ export function AdminDashboard({
             >
               <ClipboardList className="w-4 h-4" />
               <span className="tabular-nums">Đơn hàng ({orders.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('customers')}
+              className={`inline-flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'customers'
+                  ? 'bg-[#073D63] text-[#FCF9F5]'
+                  : 'text-[#5E4B3C] hover:bg-[#EFE8DD] hover:text-[#2B2018]'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span className="tabular-nums">Khách hàng ({customers.length})</span>
             </button>
 
             <button
@@ -880,6 +964,35 @@ export function AdminDashboard({
                       </table>
                     </div>
                   )}
+                  {filteredOrders.length > 0 && (
+                    <div className="flex items-center justify-between border-t border-[#E2D7C6] px-4 py-3 text-xs text-[#5E4B3C]">
+                      <span>
+                        Trang {orderPage}/{totalOrderPages} · {filteredOrders.length} đơn
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={orderPage <= 1}
+                          onClick={() => setOrderPage((page) => Math.max(1, page - 1))}
+                          className="rounded-lg border border-[#E2D7C6] px-3 py-1.5 disabled:opacity-40"
+                        >
+                          Trước
+                        </button>
+                        <button
+                          type="button"
+                          disabled={orderPage >= totalOrderPages}
+                          onClick={() =>
+                            setOrderPage((page) =>
+                              Math.min(totalOrderPages, page + 1)
+                            )
+                          }
+                          className="rounded-lg border border-[#E2D7C6] px-3 py-1.5 disabled:opacity-40"
+                        >
+                          Sau
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </>
@@ -1085,6 +1198,26 @@ export function AdminDashboard({
                     </button>
                   ))}
                 </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-xs text-[#867363]">
+                    Từ
+                    <input
+                      type="date"
+                      value={orderDateFrom}
+                      onChange={(event) => setOrderDateFrom(event.target.value)}
+                      className="ml-1.5 rounded-lg border border-[#E2D7C6] bg-white px-2 py-1.5 text-xs"
+                    />
+                  </label>
+                  <label className="text-xs text-[#867363]">
+                    Đến
+                    <input
+                      type="date"
+                      value={orderDateTo}
+                      onChange={(event) => setOrderDateTo(event.target.value)}
+                      className="ml-1.5 rounded-lg border border-[#E2D7C6] bg-white px-2 py-1.5 text-xs"
+                    />
+                  </label>
+                </div>
               </div>
 
               {orderActionError && (
@@ -1117,7 +1250,7 @@ export function AdminDashboard({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#EFE8DD] text-sm">
-                        {filteredOrders.map((order) => (
+                        {pagedOrders.map((order) => (
                           <tr
                             key={order.orderNumber}
                             className="hover:bg-[#F8F4EE]/70 transition-colors"
@@ -1194,6 +1327,42 @@ export function AdminDashboard({
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'customers' && (
+            <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl overflow-hidden">
+              {customers.length === 0 ? (
+                <div className="p-12 text-center text-sm text-[#5E4B3C]">
+                  Chưa có khách hàng trong đơn hàng.
+                </div>
+              ) : (
+                <div className="divide-y divide-[#EFE8DD]">
+                  {customers.map((customer) => (
+                    <div
+                      key={customer.key}
+                      className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <p className="font-medium text-[#2B2018]">
+                          {customer.name}
+                        </p>
+                        <p className="text-xs text-[#867363]">
+                          {customer.phone} · {customer.email}
+                        </p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <p className="text-sm font-semibold text-[#073D63] tabular-nums">
+                          {formatVND(customer.total)}
+                        </p>
+                        <p className="text-xs text-[#867363]">
+                          {customer.orders} đơn hàng
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -2034,14 +2203,23 @@ export function AdminDashboard({
                   Đặt lúc {formatOrderDate(inspectingOrder.createdAt)}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setInspectingOrder(null)}
-                aria-label="Đóng chi tiết đơn hàng"
-                className="w-8 h-8 rounded-lg border border-[#E2D7C6] flex items-center justify-center text-[#2B2018] hover:bg-[#EFE8DD] cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="rounded-lg border border-[#E2D7C6] px-3 py-1.5 text-xs font-medium text-[#2B2018]"
+                >
+                  In đơn
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInspectingOrder(null)}
+                  aria-label="Đóng chi tiết đơn hàng"
+                  className="w-8 h-8 rounded-lg border border-[#E2D7C6] flex items-center justify-center text-[#2B2018] hover:bg-[#EFE8DD] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <div className="p-6 space-y-4 text-sm">
@@ -2057,19 +2235,51 @@ export function AdminDashboard({
                 </p>
               )}
               {inspectingOrder.paymentMethod === 'vietqr' &&
-                inspectingOrder.paymentStatus === 'Chờ xác nhận thanh toán' && (
-                  <button
-                    type="button"
-                    disabled={paymentConfirming}
-                    onClick={() =>
-                      void handleConfirmOrderPayment(inspectingOrder.orderNumber)
-                    }
-                    className="w-full rounded-lg bg-[#073D63] px-4 py-2.5 text-sm font-medium text-[#FCF9F5] disabled:opacity-60"
-                  >
-                    {paymentConfirming
-                      ? 'Đang cập nhật...'
-                      : 'Xác nhận đã nhận chuyển khoản'}
-                  </button>
+                inspectingOrder.paymentStatus === 'awaiting_confirmation' && (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      disabled={paymentConfirming}
+                      onClick={() =>
+                        void handleConfirmOrderPayment(
+                          inspectingOrder.orderNumber,
+                          true
+                        )
+                      }
+                      className="w-full rounded-lg bg-[#073D63] px-4 py-2.5 text-sm font-medium text-[#FCF9F5] disabled:opacity-60"
+                    >
+                      {paymentConfirming
+                        ? 'Đang cập nhật...'
+                        : 'Đã nhận tiền'}
+                    </button>
+                    <label className="block text-xs font-medium text-[#5E4B3C]">
+                      Ghi chú khi chưa nhận được tiền
+                      <textarea
+                        value={paymentRejectionNote}
+                        onChange={(event) =>
+                          setPaymentRejectionNote(event.target.value)
+                        }
+                        maxLength={500}
+                        rows={2}
+                        className="mt-1 w-full rounded-lg border border-[#E2D7C6] bg-white px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={
+                        paymentConfirming || paymentRejectionNote.trim().length === 0
+                      }
+                      onClick={() =>
+                        void handleConfirmOrderPayment(
+                          inspectingOrder.orderNumber,
+                          false
+                        )
+                      }
+                      className="w-full rounded-lg border border-[#9E3B2B] px-4 py-2.5 text-sm font-medium text-[#9E3B2B] disabled:opacity-50"
+                    >
+                      Chưa nhận được tiền
+                    </button>
+                  </div>
                 )}
 
               <div className="p-4 rounded-lg bg-[#F8F4EE] border border-[#E2D7C6] space-y-1 text-xs text-[#5E4B3C]">
@@ -2119,11 +2329,39 @@ export function AdminDashboard({
                     </span>
                   </div>
                 ))}
-                <div className="py-3 flex justify-between font-semibold text-[#2B2018]">
-                  <span>Tổng thanh toán</span>
-                  <span className="text-[#073D63] tabular-nums">
-                    {formatVND(inspectingOrder.total)}
-                  </span>
+                <div className="py-3 space-y-1.5 text-xs text-[#5E4B3C]">
+                  <div className="flex justify-between">
+                    <span>Tiền hàng</span>
+                    <span className="tabular-nums">
+                      {formatVND(
+                        inspectingOrder.subtotal ??
+                          inspectingOrder.items.reduce(
+                            (sum, item) => sum + item.unitPrice * item.quantity,
+                            0
+                          )
+                      )}
+                    </span>
+                  </div>
+                  {(inspectingOrder.discount ?? 0) > 0 && (
+                    <div className="flex justify-between">
+                      <span>Giảm giá</span>
+                      <span className="tabular-nums">
+                        -{formatVND(inspectingOrder.discount ?? 0)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span>Phí vận chuyển</span>
+                    <span className="tabular-nums">
+                      {formatVND(inspectingOrder.shippingFee ?? 35000)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-t border-[#EFE8DD] pt-2 font-semibold text-[#2B2018]">
+                    <span>Tổng thanh toán</span>
+                    <span className="text-[#073D63] tabular-nums">
+                      {formatVND(inspectingOrder.total)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>

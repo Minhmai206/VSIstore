@@ -32,6 +32,7 @@ import {
   observeAdminOrders,
   observeCustomerOrders,
   saveStoreProduct,
+  submitCustomerOrderPayment,
   updateStoreOrderStatus,
   readCachedStoreProducts,
   writeCachedStoreProducts,
@@ -152,6 +153,8 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [adminOrders, setAdminOrders] = useState<Order[]>([]);
   const [orderNotice, setOrderNotice] = useState<string | null>(null);
+  const [initialReceiptOrder, setInitialReceiptOrder] =
+    useState<Order | null>(null);
   const observedCustomerOrders = useRef<{
     uid: string | null;
     states: Map<string, { paymentStatus: string; orderStatus: string }>;
@@ -171,6 +174,41 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const query = params.get('q') ?? '';
+    const category = params.get('category');
+    const sortBy = params.get('sort');
+    if (!query && !category && !sortBy) return;
+    setFilters((current) => ({
+      ...current,
+      query,
+      ...(category ? { category: category as CraftCategory } : {}),
+      ...(sortBy &&
+      ['featured', 'newest', 'price-asc', 'price-desc', 'rating-desc'].includes(
+        sortBy
+      )
+        ? {
+            sortBy: sortBy as FilterState['sortBy'],
+          }
+        : {}),
+    }));
+  }, []);
+
+  useEffect(() => {
+    const routeType = parseAppRoute(pathname).type;
+    if (routeType === 'admin' || routeType === 'not-found') return;
+    const params = new URLSearchParams();
+    if (filters.query.trim()) params.set('q', filters.query.trim());
+    if (filters.category !== 'Tất Cả') params.set('category', filters.category);
+    if (filters.sortBy !== 'featured') params.set('sort', filters.sortBy);
+    const search = params.toString();
+    const nextUrl = `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`;
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {
+      window.history.replaceState({}, '', nextUrl);
+    }
+  }, [filters, pathname]);
 
   useEffect(() => {
     if (route.type === 'admin') {
@@ -451,8 +489,13 @@ export default function App() {
   const handleCompleteOrder = async (order: Order): Promise<Order> => {
     const savedOrder = await createStoreOrder(order);
     setOrders((prev) => [savedOrder, ...prev]);
+    setInitialReceiptOrder(savedOrder);
     setCart([]);
     return savedOrder;
+  };
+
+  const handleMarkPaymentSent = async (orderNumber: string): Promise<void> => {
+    await submitCustomerOrderPayment(orderNumber);
   };
 
   const handleSaveProduct = async (updatedProduct: Product) => {
@@ -497,12 +540,20 @@ export default function App() {
     );
   };
 
-  const handleConfirmOrderPayment = async (orderNumber: string) => {
-    await confirmStoreOrderPayment(orderNumber);
+  const handleConfirmOrderPayment = async (
+    orderNumber: string,
+    received: boolean,
+    note?: string
+  ) => {
+    await confirmStoreOrderPayment(orderNumber, received, note);
     setAdminOrders((prev) =>
       prev.map((order) =>
         order.orderNumber === orderNumber
-          ? { ...order, paymentStatus: 'Đã xác nhận chuyển khoản' }
+          ? {
+              ...order,
+              paymentStatus: received ? 'paid' : 'pending_payment',
+              ...(note ? { paymentNote: note } : {}),
+            }
           : order
       )
     );
@@ -592,6 +643,15 @@ export default function App() {
     route.type === 'product'
       ? products.find((product) => getProductSlug(product) === route.slug)
       : undefined;
+  useEffect(() => {
+    if (route.type === 'product' && routeProduct) {
+      document.title = `${routeProduct.name} | ${SITE_CONFIG.brandName}`;
+    } else if (route.type === 'admin') {
+      document.title = `Quản trị | ${SITE_CONFIG.brandName}`;
+    } else {
+      document.title = SITE_CONFIG.brandName;
+    }
+  }, [route.type, route.type === 'product' ? route.slug : '', routeProduct]);
   const productRouteNotFound =
     route.type === 'product' &&
     !routeProduct &&
@@ -808,6 +868,8 @@ export default function App() {
         onOpenAccount={() => setAccountModalOpen(true)}
         customer={customer}
         customerOrders={orders}
+        onMarkPaymentSent={handleMarkPaymentSent}
+        initialReceiptOrder={initialReceiptOrder}
       />
 
       <OrderHistoryModal

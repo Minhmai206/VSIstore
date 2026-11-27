@@ -4,7 +4,13 @@ import {
   getAnalytics,
   isSupported as isAnalyticsSupported,
 } from 'firebase/analytics';
-import { Auth, connectAuthEmulator, getAuth } from 'firebase/auth';
+import {
+  Auth,
+  browserLocalPersistence,
+  connectAuthEmulator,
+  getAuth,
+  setPersistence,
+} from 'firebase/auth';
 import {
   Firestore,
   connectFirestoreEmulator,
@@ -108,6 +114,9 @@ export function getFirebaseAuthInstance(): Auth | null {
     if (!app) return null;
     if (!cachedAuth) {
       cachedAuth = getAuth(app);
+      void setPersistence(cachedAuth, browserLocalPersistence).catch((error) => {
+        console.warn('Không thể bật duy trì phiên đăng nhập Firebase.', error);
+      });
       if (shouldUseFirebaseEmulators()) {
         connectAuthEmulator(cachedAuth, 'http://127.0.0.1:9099', {
           disableWarnings: true,

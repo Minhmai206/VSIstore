@@ -121,6 +121,9 @@ export type OrderStatus =
   | 'Đã hủy';
 
 export type PaymentStatus =
+  | 'pending_payment'
+  | 'awaiting_confirmation'
+  | 'paid'
   | 'Đã thanh toán trực tuyến'
   | 'Đã xác nhận chuyển khoản'
   | 'Chờ xác nhận thanh toán'
@@ -139,6 +142,9 @@ export interface Order {
   paymentMethod: PaymentMethod;
   ewalletProvider?: EWalletProvider;
   paymentReference?: string;
+  paymentSubmittedAt?: string;
+  paymentConfirmedAt?: string;
+  paymentNote?: string;
   paymentStatus: PaymentStatus;
   orderStatus: OrderStatus | string;
   estimatedDelivery: string;

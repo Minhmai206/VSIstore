@@ -25,13 +25,14 @@ test('verifies a fresh SePay HMAC against the exact raw body', () => {
 });
 
 test('extracts only well-formed references from SePay code or content', () => {
+  const reference = 'VSI-0123456789abcdef0123456789abcdef';
   assert.equal(
-    extractPaymentReference({ code: 'vsi12345678901230001', content: '' }),
-    'VSI12345678901230001'
+    extractPaymentReference({ code: reference.toUpperCase(), content: '' }),
+    reference.toUpperCase()
   );
   assert.equal(
-    extractPaymentReference({ code: null, content: 'Thanh toan VSI12345678901230001 don hang' }),
-    'VSI12345678901230001'
+    extractPaymentReference({ code: null, content: `Thanh toan ${reference} don hang` }),
+    reference.toUpperCase()
   );
   assert.equal(extractPaymentReference({ code: null, content: 'VSI1234' }), null);
 });

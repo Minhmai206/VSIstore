@@ -1,4 +1,4 @@
-const ORDER_NUMBER_PATTERN = /^VSI-\d{13}-\d{4}$/;
+const ORDER_NUMBER_PATTERN = /^VSI-[a-f0-9]{32}$/i;
 
 function isValidOrderNumber(orderNumber) {
   return ORDER_NUMBER_PATTERN.test(orderNumber);
@@ -11,7 +11,7 @@ class OrderValidationError extends Error {
   }
 }
 
-function getConfirmedPaymentStatus(order) {
+function buildAdminPaymentUpdate(order, received, note, now = new Date()) {
   if (order.paymentMethod !== 'vietqr') {
     throw new OrderValidationError(
       'failed-precondition',
@@ -24,16 +24,38 @@ function getConfirmedPaymentStatus(order) {
       'Không thể xác nhận thanh toán cho đơn hàng đã hủy.'
     );
   }
-  if (order.paymentStatus === 'Đã xác nhận chuyển khoản') {
-    return order.paymentStatus;
+  if (typeof received !== 'boolean') {
+    throw new OrderValidationError(
+      'invalid-argument',
+      'Kết quả đối chiếu thanh toán không hợp lệ.'
+    );
   }
-  if (order.paymentStatus !== 'Chờ xác nhận thanh toán') {
+  if (order.paymentStatus === 'paid' && received) {
+    return { paymentStatus: 'paid' };
+  }
+  if (order.paymentStatus !== 'awaiting_confirmation') {
     throw new OrderValidationError(
       'failed-precondition',
       'Đơn hàng không còn ở trạng thái chờ xác nhận thanh toán.'
     );
   }
-  return 'Đã xác nhận chuyển khoản';
+  if (received) {
+    return {
+      paymentStatus: 'paid',
+      paymentConfirmedAt: now.toISOString(),
+    };
+  }
+  if (typeof note !== 'string' || !note.trim() || note.trim().length > 500) {
+    throw new OrderValidationError(
+      'invalid-argument',
+      'Vui lòng nhập ghi chú khi chưa nhận được tiền.'
+    );
+  }
+  return {
+    paymentStatus: 'pending_payment',
+    paymentNote: note.trim(),
+    paymentReviewedAt: now.toISOString(),
+  };
 }
 
 function requiredText(value, field, maxLength) {
@@ -52,7 +74,7 @@ function buildTrustedOrder(input, customerUid, productsById, now, paymentReferen
     throw new OrderValidationError('invalid-argument', 'Dữ liệu đơn hàng không hợp lệ.');
   }
 
-  const orderNumber = requiredText(input.orderNumber, 'mã đơn hàng', 32);
+  const orderNumber = requiredText(input.orderNumber, 'mã đơn hàng', 36);
   if (!isValidOrderNumber(orderNumber)) {
     throw new OrderValidationError('invalid-argument', 'Mã đơn hàng không hợp lệ.');
   }
@@ -178,9 +200,7 @@ function buildTrustedOrder(input, customerUid, productsById, now, paymentReferen
     paymentMethod: input.paymentMethod,
     ...(input.paymentMethod === 'vietqr' ? { paymentReference } : {}),
     paymentStatus:
-      input.paymentMethod === 'cod'
-        ? 'Thanh toán khi nhận hàng'
-        : 'Chờ xác nhận thanh toán',
+      input.paymentMethod === 'cod' ? 'Thanh toán khi nhận hàng' : 'pending_payment',
     orderStatus: 'Chờ xác nhận',
     estimatedDelivery: deliveryDate.toLocaleDateString('vi-VN', {
       weekday: 'long',
@@ -199,7 +219,7 @@ function buildTrustedOrder(input, customerUid, productsById, now, paymentReferen
 
 module.exports = {
   OrderValidationError,
+  buildAdminPaymentUpdate,
   buildTrustedOrder,
-  getConfirmedPaymentStatus,
   isValidOrderNumber,
 };

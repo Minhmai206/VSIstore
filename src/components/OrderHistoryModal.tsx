@@ -111,7 +111,15 @@ export function OrderHistoryModal({
                   </div>
                   <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#3F5E3B]">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>{order.paymentStatus}</span>
+                    <span>
+                      {order.paymentStatus === 'pending_payment'
+                        ? 'Chờ thanh toán'
+                        : order.paymentStatus === 'awaiting_confirmation'
+                          ? 'Chờ cửa hàng xác nhận'
+                          : order.paymentStatus === 'paid'
+                            ? 'Đã thanh toán'
+                            : order.paymentStatus}
+                    </span>
                   </div>
                 </div>
 
@@ -173,6 +181,17 @@ export function OrderHistoryModal({
                     Giao đến:{' '}
                     {formatAddressWithCity(order.address, order.city)} · Dự kiến{' '}
                     {order.estimatedDelivery}
+                  </span>
+                  <span className="text-sm font-semibold text-[#073D63] tabular-nums">
+                    Tiền hàng: {formatVND(order.subtotal ?? order.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0))}
+                  </span>
+                  {(order.discount ?? 0) > 0 && (
+                    <span className="text-xs tabular-nums text-[#5E4B3C]">
+                      Giảm: {formatVND(order.discount ?? 0)}
+                    </span>
+                  )}
+                  <span className="text-xs tabular-nums text-[#5E4B3C]">
+                    Phí ship: {formatVND(order.shippingFee ?? 35000)}
                   </span>
                   <span className="text-sm font-semibold text-[#073D63] tabular-nums">
                     Tổng: {formatVND(order.total)}

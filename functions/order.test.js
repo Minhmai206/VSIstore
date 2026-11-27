@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  buildAdminPaymentUpdate,
   buildTrustedOrder,
-  getConfirmedPaymentStatus,
 } = require('./order');
 
 const catalog = new Map([
@@ -20,7 +20,7 @@ const catalog = new Map([
 ]);
 
 const request = {
-  orderNumber: 'VSI-1710000000000-1234',
+  orderNumber: 'VSI-0123456789abcdef0123456789abcdef',
   customerName: 'Nguyễn An',
   phone: '0912345678',
   email: 'an@example.com',
@@ -39,7 +39,7 @@ test('builds the payable total from catalog prices, not client-supplied totals',
     'customer-uid',
     catalog,
     new Date('2026-01-01T00:00:00.000Z'),
-    'VSI12345678901230001'
+    request.orderNumber
   );
 
   assert.equal(order.subtotal, 3000);
@@ -49,6 +49,8 @@ test('builds the payable total from catalog prices, not client-supplied totals',
   assert.equal(order.total === request.total, false);
   assert.equal(order.customerUid, 'customer-uid');
   assert.equal(order.items[0].unitPrice, 1500);
+  assert.equal(order.paymentReference, request.orderNumber);
+  assert.equal(order.paymentStatus, 'pending_payment');
 });
 
 test('rejects orders whose requested quantity exceeds the catalog stock', () => {
@@ -59,7 +61,7 @@ test('rejects orders whose requested quantity exceeds the catalog stock', () => 
         'customer-uid',
         catalog,
         new Date(),
-        'VSI12345678901230001'
+        request.orderNumber
       ),
     (error) => error.code === 'failed-precondition'
   );
@@ -69,39 +71,50 @@ test('rejects order numbers from the previous prefix', () => {
   assert.throws(
     () =>
       buildTrustedOrder(
-        { ...request, orderNumber: 'MD-1710000000000-1234' },
+        { ...request, orderNumber: 'MD-0123456789abcdef0123456789abcdef' },
         'customer-uid',
         catalog,
         new Date(),
-        'VSI12345678901230001'
+        request.orderNumber
       ),
     (error) => error.code === 'invalid-argument'
   );
 });
 
-test('allows an admin to confirm only a pending, non-cancelled VietQR order', () => {
+test('allows an admin to confirm a customer-submitted VietQR payment', () => {
   const pendingOrder = {
     paymentMethod: 'vietqr',
-    paymentStatus: 'Chờ xác nhận thanh toán',
+    paymentStatus: 'awaiting_confirmation',
     orderStatus: 'Chờ xác nhận',
   };
   assert.equal(
-    getConfirmedPaymentStatus(pendingOrder),
-    'Đã xác nhận chuyển khoản'
+    buildAdminPaymentUpdate(
+      pendingOrder,
+      true,
+      undefined,
+      new Date('2026-01-01T00:00:00.000Z')
+    ).paymentStatus,
+    'paid'
   );
   assert.equal(
-    getConfirmedPaymentStatus({
-      ...pendingOrder,
-      paymentStatus: 'Đã xác nhận chuyển khoản',
-    }),
-    'Đã xác nhận chuyển khoản'
+    buildAdminPaymentUpdate(
+      pendingOrder,
+      false,
+      'Chưa thấy giao dịch',
+      new Date('2026-01-01T00:00:00.000Z')
+    ).paymentNote,
+    'Chưa thấy giao dịch'
+  );
+  assert.throws(
+    () => buildAdminPaymentUpdate(pendingOrder, false, ''),
+    (error) => error.code === 'invalid-argument'
   );
   assert.throws(
     () =>
-      getConfirmedPaymentStatus({
+      buildAdminPaymentUpdate({
         ...pendingOrder,
         orderStatus: 'Đã hủy',
-      }),
+      }, true),
     (error) => error.code === 'failed-precondition'
   );
 });

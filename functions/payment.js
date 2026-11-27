@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 
-const PAYMENT_REFERENCE_PATTERN = /^VSI\d{17}$/i;
-const PAYMENT_REFERENCE_IN_TEXT_PATTERN = /\bVSI\d{17}\b/i;
+const PAYMENT_REFERENCE_PATTERN = /^VSI-[a-f0-9]{32}$/i;
+const PAYMENT_REFERENCE_IN_TEXT_PATTERN = /\bVSI-[a-f0-9]{32}\b/i;
 
 function verifySePaySignature(rawBody, signature, timestamp, secret, nowSeconds = Date.now() / 1000) {
   const timestampSeconds = Number(timestamp);

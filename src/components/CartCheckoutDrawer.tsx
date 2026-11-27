@@ -28,6 +28,7 @@ import {
   formatVND,
 } from '../utils/format';
 import { SITE_CONFIG } from '../config/site';
+import { PAYMENT_CONFIG } from '../config/payment';
 import { CustomerProfile } from '../services/customerRepository';
 import { ResilientImage } from './ResilientImage';
 
@@ -45,20 +46,17 @@ interface CartCheckoutDrawerProps {
   onCompleteOrder: (order: Order) => Promise<Order>;
   onOpenOrderHistory: () => void;
   onOpenAccount: () => void;
+  onMarkPaymentSent: (orderNumber: string) => Promise<void>;
   customer: CustomerProfile | null;
   customerOrders: Order[];
+  initialReceiptOrder: Order | null;
 }
 
 const FREE_SHIPPING_THRESHOLD = 1500000;
-const VIETQR_BANK_BIN = import.meta.env.VITE_VIETQR_BANK_BIN?.trim() ?? '';
-const VIETQR_BANK_NAME = import.meta.env.VITE_VIETQR_BANK_NAME?.trim() ?? '';
-const VIETQR_ACCOUNT_NUMBER =
-  import.meta.env.VITE_VIETQR_ACCOUNT_NUMBER?.trim() ?? '';
-const VIETQR_ACCOUNT_NAME =
-  import.meta.env.VITE_VIETQR_ACCOUNT_NAME?.trim() ?? '';
-const VIETQR_CONFIGURED = Boolean(
-  VIETQR_BANK_BIN && VIETQR_ACCOUNT_NUMBER && VIETQR_ACCOUNT_NAME
-);
+const VIETQR_BANK_BIN = PAYMENT_CONFIG.vietqr.bankBin;
+const VIETQR_BANK_NAME = PAYMENT_CONFIG.vietqr.bankName;
+const VIETQR_ACCOUNT_NUMBER = PAYMENT_CONFIG.vietqr.accountNumber;
+const VIETQR_ACCOUNT_NAME = PAYMENT_CONFIG.vietqr.accountName;
 
 const INITIAL_FORM: CheckoutForm = {
   fullName: '',
@@ -88,8 +86,10 @@ export function CartCheckoutDrawer({
   onCompleteOrder,
   onOpenOrderHistory,
   onOpenAccount,
+  onMarkPaymentSent,
   customer,
   customerOrders,
+  initialReceiptOrder,
 }: CartCheckoutDrawerProps) {
   const fieldId = useId().replace(/:/g, '');
   const [promoInput, setPromoInput] = useState('');
@@ -97,11 +97,13 @@ export function CartCheckoutDrawer({
   const [promoError, setPromoError] = useState('');
   const [form, setForm] = useState<CheckoutForm>(INITIAL_FORM);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
-  const [copiedRef, setCopiedRef] = useState(false);
+  const [copiedRef, setCopiedRef] = useState<string | false>(false);
   const [latestOrder, setLatestOrder] = useState<Order | null>(null);
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderError, setOrderError] = useState('');
   const [copyError, setCopyError] = useState('');
+  const [paymentSubmitError, setPaymentSubmitError] = useState('');
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [qrImageFailed, setQrImageFailed] = useState(false);
   const receiptOrder = latestOrder
     ? customerOrders.find(
@@ -119,6 +121,13 @@ export function CartCheckoutDrawer({
       address: customer.address,
     }));
   }, [customer]);
+
+  useEffect(() => {
+    if (!isOpen || !initialReceiptOrder) return;
+    setLatestOrder(initialReceiptOrder);
+    setQrImageFailed(false);
+    onChangeStep('receipt');
+  }, [initialReceiptOrder, isOpen, onChangeStep]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -235,20 +244,13 @@ export function CartCheckoutDrawer({
       onOpenAccount();
       return;
     }
-    if (form.paymentMethod === 'vietqr' && !VIETQR_CONFIGURED) {
-      setOrderError(
-        'Chưa cấu hình tài khoản nhận VietQR. Vui lòng chọn COD hoặc cấu hình thông tin ngân hàng.'
-      );
-      return;
-    }
     if (!validateCheckout() || enrichedItems.length === 0) return;
 
     setOrderError('');
-    const orderNumber = `${SITE_CONFIG.orderNumberPrefix}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const uuid = window.crypto.randomUUID();
+    const orderNumber = `${SITE_CONFIG.orderNumberPrefix}-${uuid.replace(/-/g, '')}`;
     const paymentReference =
-      form.paymentMethod === 'vietqr'
-        ? `${SITE_CONFIG.brandName}${Date.now()}${Math.floor(1000 + Math.random() * 9000)}`
-        : undefined;
+      form.paymentMethod === 'vietqr' ? orderNumber : undefined;
     const now = new Date();
     const deliveryDate = new Date(
       now.getTime() +
@@ -273,7 +275,7 @@ export function CartCheckoutDrawer({
       paymentStatus:
         form.paymentMethod === 'cod'
           ? 'Thanh toán khi nhận hàng'
-          : 'Chờ xác nhận thanh toán',
+          : 'pending_payment',
       orderStatus: 'Chờ xác nhận',
       estimatedDelivery: deliveryDate.toLocaleDateString('vi-VN', {
         weekday: 'long',
@@ -314,22 +316,44 @@ export function CartCheckoutDrawer({
     }
 
     setQrImageFailed(false);
+    setPaymentSubmitError('');
     setLatestOrder(savedOrder);
     onChangeStep('receipt');
   };
 
-  const handleCopyTransfer = async (order: Order) => {
-    if (!order.paymentReference) return;
+  const handleMarkPaymentSent = async (order: Order) => {
+    setPaymentSubmitError('');
+    setPaymentSubmitting(true);
+    try {
+      await onMarkPaymentSent(order.orderNumber);
+    } catch (error) {
+      setPaymentSubmitError(
+        error instanceof Error
+          ? error.message
+          : 'Không thể gửi thông báo thanh toán. Vui lòng thử lại.'
+      );
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  };
+
+  const handleCopyValue = async (key: string, value: string) => {
     setCopyError('');
     try {
-      await navigator.clipboard.writeText(
-        `${VIETQR_BANK_NAME} - ${VIETQR_ACCOUNT_NUMBER} - ${VIETQR_ACCOUNT_NAME} - ${order.total} - ${order.paymentReference}`
-      );
-      setCopiedRef(true);
+      await navigator.clipboard.writeText(value);
+      setCopiedRef(key);
       window.setTimeout(() => setCopiedRef(false), 1500);
     } catch {
-      setCopyError('Không thể tự sao chép. Vui lòng nhập nội dung chuyển khoản thủ công.');
+      setCopyError('Không thể tự sao chép. Vui lòng sao chép thông tin thủ công.');
     }
+  };
+
+  const handleCopyTransfer = async (order: Order) => {
+    if (!order.paymentReference) return;
+    await handleCopyValue(
+      'transfer',
+      `${VIETQR_BANK_NAME} - ${VIETQR_ACCOUNT_NUMBER} - ${VIETQR_ACCOUNT_NAME} - ${order.total} - ${order.paymentReference}`
+    );
   };
 
   const paymentOptions: {
@@ -341,9 +365,7 @@ export function CartCheckoutDrawer({
     {
       id: 'vietqr',
       title: 'Chuyển khoản VietQR',
-      desc: VIETQR_CONFIGURED
-        ? 'Quét QR sau khi lưu đơn; quản trị viên sẽ kiểm tra giao dịch và xác nhận thủ công.'
-        : 'Cần cấu hình tài khoản nhận tiền trước khi sử dụng.',
+      desc: 'Quét QR sau khi lưu đơn; quản trị viên sẽ kiểm tra giao dịch và xác nhận thủ công.',
       icon: <QrCode className="w-4 h-4" />,
     },
     {
@@ -1040,7 +1062,9 @@ export function CartCheckoutDrawer({
                   <CheckCircle2 className="w-6 h-6 shrink-0" />
                   <div>
                     <p className="text-xs font-medium uppercase tracking-wide">
-                      {receiptOrder.paymentStatus}
+                    {receiptOrder.paymentStatus === 'paid'
+                      ? 'Đã thanh toán'
+                      : receiptOrder.paymentStatus}
                     </p>
                     <h3 className="font-serif text-2xl font-semibold text-[#2B2018]">
                       Đơn hàng #{receiptOrder.orderNumber}
@@ -1063,9 +1087,7 @@ export function CartCheckoutDrawer({
               {receiptOrder.paymentMethod === 'vietqr' && (
                 <div className="rounded-xl border border-[#E2D7C6] bg-[#F8F4EE] p-4">
                   <div className="flex flex-col items-center gap-4 sm:flex-row">
-                    {VIETQR_CONFIGURED &&
-                    !qrImageFailed &&
-                    receiptOrder.paymentReference ? (
+                    {!qrImageFailed && receiptOrder.paymentReference ? (
                       <img
                         src={`https://img.vietqr.io/image/${encodeURIComponent(VIETQR_BANK_BIN)}-${encodeURIComponent(VIETQR_ACCOUNT_NUMBER)}-compact2.png?amount=${Math.round(receiptOrder.total)}&addInfo=${encodeURIComponent(receiptOrder.paymentReference)}&accountName=${encodeURIComponent(VIETQR_ACCOUNT_NAME)}`}
                         alt="Mã QR chuyển khoản VietQR"
@@ -1074,17 +1096,58 @@ export function CartCheckoutDrawer({
                       />
                     ) : (
                       <div className="flex h-40 w-40 shrink-0 items-center justify-center rounded-lg border border-[#E2D7C6] bg-white p-3 text-center text-xs text-[#9E3B2B]">
-                        {VIETQR_CONFIGURED
-                          ? 'Không tải được mã QR. Vui lòng chuyển khoản thủ công theo thông tin bên cạnh.'
-                          : 'Chưa cấu hình thông tin tài khoản nhận VietQR.'}
+                        'Không tải được mã QR. Vui lòng chuyển khoản thủ công theo thông tin bên cạnh.'
                       </div>
                     )}
                     <div className="flex-1 space-y-1.5 text-xs text-[#5E4B3C]">
                       <p className="text-sm font-semibold text-[#2B2018]">
-                        {VIETQR_BANK_NAME || 'Ngân hàng'}
+                        {VIETQR_BANK_NAME}
                       </p>
-                      <p>Số tài khoản: {VIETQR_ACCOUNT_NUMBER || 'Chưa cấu hình'}</p>
-                      <p>Chủ tài khoản: {VIETQR_ACCOUNT_NAME || 'Chưa cấu hình'}</p>
+                      <p>
+                        Mã ngân hàng: {VIETQR_BANK_BIN}
+                        <button
+                          type="button"
+                          aria-label="Sao chép mã ngân hàng"
+                          onClick={() => void handleCopyValue('bin', VIETQR_BANK_BIN)}
+                          className="ml-2 inline-flex items-center gap-1 text-[#073D63]"
+                        >
+                          <Copy className="h-3 w-3" />
+                          {copiedRef === 'bin' ? 'Đã sao chép' : 'Sao chép'}
+                        </button>
+                      </p>
+                      <p>
+                        Chi nhánh: {PAYMENT_CONFIG.vietqr.branch}
+                      </p>
+                      <p>
+                        Số tài khoản: {VIETQR_ACCOUNT_NUMBER}
+                        <button
+                          type="button"
+                          aria-label="Sao chép số tài khoản"
+                          onClick={() =>
+                            void handleCopyValue('account', VIETQR_ACCOUNT_NUMBER)
+                          }
+                          className="ml-2 inline-flex items-center gap-1 text-[#073D63]"
+                        >
+                          <Copy className="h-3 w-3" />
+                          {copiedRef === 'account' ? 'Đã sao chép' : 'Sao chép'}
+                        </button>
+                      </p>
+                      <p>
+                        Chủ tài khoản: {VIETQR_ACCOUNT_NAME}
+                        <button
+                          type="button"
+                          aria-label="Sao chép tên chủ tài khoản"
+                          onClick={() =>
+                            void handleCopyValue('accountName', VIETQR_ACCOUNT_NAME)
+                          }
+                          className="ml-2 inline-flex items-center gap-1 text-[#073D63]"
+                        >
+                          <Copy className="h-3 w-3" />
+                          {copiedRef === 'accountName'
+                            ? 'Đã sao chép'
+                            : 'Sao chép'}
+                        </button>
+                      </p>
                       <p>
                         Số tiền:{' '}
                         <strong className="text-[#073D63]">
@@ -1093,10 +1156,25 @@ export function CartCheckoutDrawer({
                       </p>
                       <p className="font-mono text-[#2B2018]">
                         Nội dung CK: {receiptOrder.paymentReference}
+                        <button
+                          type="button"
+                          aria-label="Sao chép nội dung chuyển khoản"
+                          onClick={() =>
+                            void handleCopyValue(
+                              'reference',
+                              receiptOrder.paymentReference ?? ''
+                            )
+                          }
+                          className="ml-2 inline-flex items-center gap-1 font-sans text-[#073D63]"
+                        >
+                          <Copy className="h-3 w-3" />
+                          {copiedRef === 'reference'
+                            ? 'Đã sao chép'
+                            : 'Sao chép'}
+                        </button>
                       </p>
                       <button
                         type="button"
-                        disabled={!VIETQR_CONFIGURED}
                         onClick={() => void handleCopyTransfer(receiptOrder)}
                         className="mt-1 inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-[#073D63] hover:text-[#5E3A1F] disabled:cursor-not-allowed disabled:opacity-50"
                       >
@@ -1113,10 +1191,29 @@ export function CartCheckoutDrawer({
                         </p>
                       )}
                       <p className="text-[#867363]">
-                        Đơn đang chờ quản trị viên đối chiếu giao dịch ngân hàng.
-                        Sau khi xác nhận, trạng thái sẽ cập nhật trong lịch sử
-                        đơn hàng.
+                        {receiptOrder.paymentStatus === 'paid'
+                          ? 'Giao dịch đã được cửa hàng xác nhận.'
+                          : receiptOrder.paymentStatus === 'awaiting_confirmation'
+                            ? 'Cửa hàng đang đối chiếu giao dịch. Trạng thái sẽ cập nhật tại đây.'
+                            : 'Sau khi chuyển khoản, hãy bấm “Tôi đã thanh toán” để cửa hàng kiểm tra giao dịch.'}
                       </p>
+                      {receiptOrder.paymentStatus === 'pending_payment' && (
+                        <button
+                          type="button"
+                          disabled={paymentSubmitting}
+                          onClick={() => void handleMarkPaymentSent(receiptOrder)}
+                          className="mt-2 w-full rounded-lg bg-[#073D63] px-4 py-2.5 text-sm font-medium text-[#FCF9F5] hover:bg-[#0B527F] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {paymentSubmitting
+                            ? 'Đang gửi thông báo...'
+                            : 'Tôi đã thanh toán'}
+                        </button>
+                      )}
+                      {paymentSubmitError && (
+                        <p role="alert" className="text-[#9E3B2B]">
+                          {paymentSubmitError}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1252,7 +1349,10 @@ export function CartCheckoutDrawer({
                   form="online-checkout-form"
                   disabled={
                     orderBusy ||
-                    (form.paymentMethod === 'vietqr' && !VIETQR_CONFIGURED)
+                    (form.paymentMethod === 'vietqr' &&
+                      (!VIETQR_BANK_BIN ||
+                        !VIETQR_ACCOUNT_NUMBER ||
+                        !VIETQR_ACCOUNT_NAME))
                   }
                   className="w-full py-3 px-4 rounded-lg bg-[#073D63] hover:bg-[#5E3A1F] text-[#FCF9F5] text-sm font-medium transition-colors inline-flex items-center justify-center gap-2 cursor-pointer tabular-nums disabled:cursor-wait disabled:opacity-60"
                 >
