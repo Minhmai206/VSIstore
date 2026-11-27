@@ -59,9 +59,11 @@ interface AdminDashboardProps {
     received: boolean,
     note?: string
   ) => Promise<void> | void;
+  onApproveOrder: (orderNumber: string) => Promise<Order>;
 }
 
 const ORDER_STATUS_OPTIONS: OrderStatus[] = [
+  'Chờ duyệt giá và tồn kho',
   'Chờ xác nhận',
   'Đang đóng gói chống sốc',
   'Đang giao hàng',
@@ -197,6 +199,7 @@ export function AdminDashboard({
   onDeleteProduct,
   onUpdateOrderStatus,
   onConfirmOrderPayment,
+  onApproveOrder,
 }: AdminDashboardProps) {
   const fieldId = useId().replace(/:/g, '');
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -218,6 +221,7 @@ export function AdminDashboard({
   const [productActionError, setProductActionError] = useState('');
   const [orderActionError, setOrderActionError] = useState('');
   const [paymentConfirming, setPaymentConfirming] = useState(false);
+  const [approvingOrder, setApprovingOrder] = useState(false);
   const [paymentRejectionNote, setPaymentRejectionNote] = useState('');
   const [uploadingImages, setUploadingImages] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -229,7 +233,11 @@ export function AdminDashboard({
   const storageMode = getStorageBackendMode();
 
   const metrics = useMemo(() => {
-    const validOrders = orders.filter((o) => o.orderStatus !== 'Đã hủy');
+    const validOrders = orders.filter(
+      (order) =>
+        order.orderStatus !== 'Đã hủy' &&
+        order.paymentStatus !== 'awaiting_admin_review'
+    );
     const totalRevenue = validOrders.reduce((sum, o) => sum + o.total, 0);
     const totalOrders = orders.length;
     const avgOrderValue =
@@ -460,6 +468,23 @@ export function AdminDashboard({
       );
     } finally {
       setPaymentConfirming(false);
+    }
+  };
+
+  const handleApproveOrder = async (orderNumber: string) => {
+    setOrderActionError('');
+    setApprovingOrder(true);
+    try {
+      const approvedOrder = await onApproveOrder(orderNumber);
+      setInspectingOrder(approvedOrder);
+    } catch (error) {
+      setOrderActionError(
+        error instanceof Error
+          ? `Không thể xác nhận giá và tồn kho: ${error.message}`
+          : 'Không thể xác nhận giá và tồn kho. Vui lòng thử lại.'
+      );
+    } finally {
+      setApprovingOrder(false);
     }
   };
 
@@ -740,7 +765,13 @@ export function AdminDashboard({
               }`}
             >
               <ClipboardList className="w-4 h-4" />
-              <span className="tabular-nums">Đơn hàng ({orders.length})</span>
+              <span className="tabular-nums">
+                Đơn hàng ({orders.length})
+                {orders.some(
+                  (order) => order.paymentStatus === 'awaiting_admin_review'
+                ) &&
+                  ` · cần duyệt ${orders.filter((order) => order.paymentStatus === 'awaiting_admin_review').length}`}
+              </span>
             </button>
 
             <button
@@ -1280,7 +1311,9 @@ export function AdminDashboard({
                                 {order.paymentMethod === 'cod' && 'COD'}
                               </p>
                               <p className="text-[#5E4B3C] mt-0.5">
-                                {order.paymentStatus}
+                                {order.paymentStatus === 'awaiting_admin_review'
+                                  ? 'Chờ duyệt giá'
+                                  : order.paymentStatus}
                               </p>
                             </td>
                             <td className="py-3.5 px-4">
@@ -1291,6 +1324,9 @@ export function AdminDashboard({
                                 id={`${fieldId}-order-status-${order.orderNumber}`}
                                 name={`orderStatus-${order.orderNumber}`}
                                 value={order.orderStatus}
+                                disabled={
+                                  order.paymentStatus === 'awaiting_admin_review'
+                                }
                                 onChange={(e) =>
                                   void handleOrderStatusChange(
                                     order.orderNumber,
@@ -1308,7 +1344,9 @@ export function AdminDashboard({
                               </select>
                             </td>
                             <td className="py-3.5 px-4 text-right font-semibold text-[#073D63] tabular-nums whitespace-nowrap">
-                              {formatVND(order.total)}
+                              {order.paymentStatus === 'awaiting_admin_review'
+                                ? 'Chờ duyệt giá'
+                                : formatVND(order.total)}
                             </td>
                             <td className="py-3.5 px-6 text-right whitespace-nowrap">
                               <button
@@ -2226,13 +2264,37 @@ export function AdminDashboard({
               <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#3F5E3B]">
                 <CheckCircle2 className="w-4 h-4" />
                 <span>
-                  {inspectingOrder.paymentStatus} · {inspectingOrder.orderStatus}
+                  {inspectingOrder.paymentStatus === 'awaiting_admin_review'
+                    ? 'Chờ duyệt giá'
+                    : inspectingOrder.paymentStatus}{' '}
+                  · {inspectingOrder.orderStatus}
                 </span>
               </div>
               {orderActionError && (
                 <p role="alert" className="rounded-lg bg-[#F5E4E1] px-3.5 py-2.5 text-xs font-medium text-[#9E3B2B]">
                   {orderActionError}
                 </p>
+              )}
+              {inspectingOrder.paymentStatus === 'awaiting_admin_review' && (
+                <div className="space-y-2 rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] p-4">
+                  <p className="text-xs leading-relaxed text-[#5E4B3C]">
+                    Đơn mới chưa có giá được xác nhận. Bấm duyệt để lấy giá, phân loại
+                    và tồn kho từ danh mục Firestore; sau đó khách mới xem được QR hoặc
+                    số tiền COD.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={approvingOrder}
+                    onClick={() =>
+                      void handleApproveOrder(inspectingOrder.orderNumber)
+                    }
+                    className="w-full rounded-lg bg-[#073D63] px-4 py-2.5 text-sm font-medium text-[#FCF9F5] disabled:opacity-60"
+                  >
+                    {approvingOrder
+                      ? 'Đang xác minh catalog...'
+                      : 'Xác nhận giá và tồn kho'}
+                  </button>
+                </div>
               )}
               {inspectingOrder.paymentMethod === 'vietqr' &&
                 inspectingOrder.paymentStatus === 'awaiting_confirmation' && (
@@ -2313,23 +2375,47 @@ export function AdminDashboard({
               </div>
 
               <div className="divide-y divide-[#EFE8DD] border border-[#E2D7C6] rounded-lg px-4">
-                {inspectingOrder.items.map((item, idx) => (
-                  <div
-                    key={`${item.productId}-${idx}`}
-                    className="py-2.5 flex items-center justify-between gap-3 text-xs"
-                  >
-                    <div>
-                      <p className="font-medium text-[#2B2018]">
-                        {item.name} × {item.quantity}
-                      </p>
-                      <p className="text-[#867363]">{item.variantLabel}</p>
+                {inspectingOrder.items.map((item, idx) => {
+                  const catalogProduct = products.find(
+                    (product) => product.id === item.productId
+                  );
+                  const catalogVariant = catalogProduct?.variants.find(
+                    (variant) => variant.id === item.variantId
+                  );
+                  const awaitingPriceApproval =
+                    inspectingOrder.paymentStatus === 'awaiting_admin_review';
+                  return (
+                    <div
+                      key={`${item.productId}-${idx}`}
+                      className="py-2.5 flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div>
+                        <p className="font-medium text-[#2B2018]">
+                          {awaitingPriceApproval
+                            ? catalogProduct?.name ?? `Sản phẩm ${item.productId}`
+                            : item.name}{' '}
+                          × {item.quantity}
+                        </p>
+                        <p className="text-[#867363]">
+                          {awaitingPriceApproval
+                            ? catalogVariant?.label ?? `Phân loại ${item.variantId}`
+                            : item.variantLabel}
+                        </p>
+                      </div>
+                      <span className="font-semibold text-[#2B2018] tabular-nums">
+                        {awaitingPriceApproval
+                          ? 'Chưa xác nhận giá'
+                          : formatVND(item.unitPrice * item.quantity)}
+                      </span>
                     </div>
-                    <span className="font-semibold text-[#2B2018] tabular-nums">
-                      {formatVND(item.unitPrice * item.quantity)}
-                    </span>
-                  </div>
-                ))}
-                <div className="py-3 space-y-1.5 text-xs text-[#5E4B3C]">
+                  );
+                })}
+                {inspectingOrder.paymentStatus === 'awaiting_admin_review' ? (
+                  <p className="py-3 text-xs text-[#867363]">
+                    Tổng tiền sẽ được tính từ danh mục khi admin duyệt đơn.
+                  </p>
+                ) : (
+                  <div className="py-3 space-y-1.5 text-xs text-[#5E4B3C]">
                   <div className="flex justify-between">
                     <span>Tiền hàng</span>
                     <span className="tabular-nums">
@@ -2362,7 +2448,8 @@ export function AdminDashboard({
                       {formatVND(inspectingOrder.total)}
                     </span>
                   </div>
-                </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

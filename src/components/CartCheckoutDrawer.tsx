@@ -58,6 +58,17 @@ const VIETQR_BANK_NAME = PAYMENT_CONFIG.vietqr.bankName;
 const VIETQR_ACCOUNT_NUMBER = PAYMENT_CONFIG.vietqr.accountNumber;
 const VIETQR_ACCOUNT_NAME = PAYMENT_CONFIG.vietqr.accountName;
 
+function createOrderId(): string {
+  if (typeof window.crypto?.getRandomValues !== 'function') {
+    throw new Error('Trình duyệt không hỗ trợ tạo mã đơn hàng an toàn.');
+  }
+
+  const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 const INITIAL_FORM: CheckoutForm = {
   fullName: '',
   phone: '',
@@ -247,8 +258,17 @@ export function CartCheckoutDrawer({
     if (!validateCheckout() || enrichedItems.length === 0) return;
 
     setOrderError('');
-    const uuid = window.crypto.randomUUID();
-    const orderNumber = `${SITE_CONFIG.orderNumberPrefix}-${uuid.replace(/-/g, '')}`;
+    let orderNumber: string;
+    try {
+      orderNumber = `${SITE_CONFIG.orderNumberPrefix}-${createOrderId()}`;
+    } catch (error) {
+      setOrderError(
+        error instanceof Error
+          ? error.message
+          : 'Không thể tạo mã đơn hàng an toàn. Vui lòng thử lại trên trình duyệt khác.'
+      );
+      return;
+    }
     const paymentReference =
       form.paymentMethod === 'vietqr' ? orderNumber : undefined;
     const now = new Date();
@@ -1062,9 +1082,11 @@ export function CartCheckoutDrawer({
                   <CheckCircle2 className="w-6 h-6 shrink-0" />
                   <div>
                     <p className="text-xs font-medium uppercase tracking-wide">
-                    {receiptOrder.paymentStatus === 'paid'
-                      ? 'Đã thanh toán'
-                      : receiptOrder.paymentStatus}
+                      {receiptOrder.paymentStatus === 'awaiting_admin_review'
+                        ? 'Chờ cửa hàng xác nhận đơn'
+                        : receiptOrder.paymentStatus === 'paid'
+                          ? 'Đã thanh toán'
+                          : receiptOrder.paymentStatus}
                     </p>
                     <h3 className="font-serif text-2xl font-semibold text-[#2B2018]">
                       Đơn hàng #{receiptOrder.orderNumber}
@@ -1072,19 +1094,35 @@ export function CartCheckoutDrawer({
                   </div>
                 </div>
                 <p className="text-sm text-[#5E4B3C]">
-                  {receiptOrder.orderStatus}. Dự kiến giao đến{' '}
-                  <strong className="text-[#2B2018]">
-                    {receiptOrder.city}
-                  </strong>{' '}
-                  vào ngày{' '}
-                  <strong className="text-[#2B2018]">
-                    {receiptOrder.estimatedDelivery}
-                  </strong>
-                  .
+                  {receiptOrder.orderStatus}
+                  {receiptOrder.estimatedDelivery
+                    ? (
+                        <>
+                          . Dự kiến giao đến{' '}
+                          <strong className="text-[#2B2018]">
+                            {receiptOrder.city}
+                          </strong>{' '}
+                          vào ngày{' '}
+                          <strong className="text-[#2B2018]">
+                            {receiptOrder.estimatedDelivery}
+                          </strong>
+                          .
+                        </>
+                      )
+                    : '. Thời gian giao dự kiến sẽ được cập nhật sau khi cửa hàng xác nhận.'}
                 </p>
               </div>
 
-              {receiptOrder.paymentMethod === 'vietqr' && (
+              {receiptOrder.paymentStatus === 'awaiting_admin_review' && (
+                <div className="rounded-xl border border-[#E2D7C6] bg-[#F8F4EE] p-4 text-sm leading-relaxed text-[#5E4B3C]">
+                  Cửa hàng đang xác minh sản phẩm, tồn kho và tổng tiền từ danh mục.
+                  Chưa cần thanh toán; trạng thái đơn sẽ cập nhật trực tiếp tại đây
+                  khi admin xác nhận.
+                </div>
+              )}
+
+              {receiptOrder.paymentMethod === 'vietqr' &&
+                receiptOrder.paymentStatus !== 'awaiting_admin_review' && (
                 <div className="rounded-xl border border-[#E2D7C6] bg-[#F8F4EE] p-4">
                   <div className="flex flex-col items-center gap-4 sm:flex-row">
                     {!qrImageFailed && receiptOrder.paymentReference ? (
@@ -1096,7 +1134,7 @@ export function CartCheckoutDrawer({
                       />
                     ) : (
                       <div className="flex h-40 w-40 shrink-0 items-center justify-center rounded-lg border border-[#E2D7C6] bg-white p-3 text-center text-xs text-[#9E3B2B]">
-                        'Không tải được mã QR. Vui lòng chuyển khoản thủ công theo thông tin bên cạnh.'
+                        Không tải được mã QR. Vui lòng chuyển khoản thủ công theo thông tin bên cạnh.
                       </div>
                     )}
                     <div className="flex-1 space-y-1.5 text-xs text-[#5E4B3C]">

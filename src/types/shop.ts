@@ -114,6 +114,7 @@ export interface OrderItemSnapshot {
 }
 
 export type OrderStatus =
+  | 'Chờ duyệt giá và tồn kho'
   | 'Chờ xác nhận'
   | 'Đang đóng gói chống sốc'
   | 'Đang giao hàng'
@@ -121,6 +122,7 @@ export type OrderStatus =
   | 'Đã hủy';
 
 export type PaymentStatus =
+  | 'awaiting_admin_review'
   | 'pending_payment'
   | 'awaiting_confirmation'
   | 'paid'

@@ -23,6 +23,7 @@ import { TopBanner } from './components/TopBanner';
 import { SITE_CONFIG } from './config/site';
 import {
   confirmStoreOrderPayment,
+  approveStoreOrder,
   createStoreOrder,
   deleteStoreProduct,
   fetchAdminOrders,
@@ -559,6 +560,18 @@ export default function App() {
     );
   };
 
+  const handleApproveOrder = async (orderNumber: string): Promise<Order> => {
+    const currentProducts = await fetchStoreProducts();
+    setProducts(currentProducts);
+    const approvedOrder = await approveStoreOrder(orderNumber, currentProducts);
+    setAdminOrders((prev) =>
+      prev.map((order) =>
+        order.orderNumber === orderNumber ? approvedOrder : order
+      )
+    );
+    return approvedOrder;
+  };
+
   const handleAdminAuthenticated = async () => {
     if (adminInitialization.current) {
       await adminInitialization.current;
@@ -683,6 +696,7 @@ export default function App() {
           onDeleteProduct={handleDeleteProduct}
           onUpdateOrderStatus={handleUpdateOrderStatus}
           onConfirmOrderPayment={handleConfirmOrderPayment}
+          onApproveOrder={handleApproveOrder}
         />
       </Suspense>
     );

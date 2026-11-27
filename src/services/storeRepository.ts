@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteField,
   deleteDoc,
   doc,
   getDoc,
@@ -9,11 +10,9 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 import { INITIAL_ORDERS } from '../data/products';
 import { Order, OrderStatus, Product } from '../types/shop';
 import {
-  getFirebaseFunctionsInstance,
   getFirestoreInstance,
   isFirebaseConfigured,
 } from './firebaseConfig';
@@ -373,50 +372,182 @@ export function observeAdminOrders(
 }
 
 export async function createStoreOrder(order: Order): Promise<Order> {
-  if (!order.customerUid) {
+  const customerUid = order.customerUid;
+  if (!customerUid) {
     throw new Error('Vui lòng đăng nhập tài khoản khách hàng trước khi đặt đơn.');
   }
 
-  const functions = getFirebaseFunctionsInstance();
-  if (!functions) {
-    if (getFirestoreInstance()) {
-      throw new Error('Dịch vụ tạo đơn Firebase chưa được cấu hình.');
-    }
+  const db = getFirestoreInstance();
+  if (!db) {
     writeLocalOrders([order, ...readLocalOrders()]);
-    rememberCustomerOrderId(order.customerUid, order.orderNumber);
+    rememberCustomerOrderId(customerUid, order.orderNumber);
     rememberPendingCustomerOrder(order);
     return order;
   }
 
-  const orderInput = {
-    orderNumber: order.orderNumber,
-    customerName: order.customerName,
-    phone: order.phone,
-    email: order.email,
-    address: order.address,
-    city: order.city,
-    shippingMethod: order.shippingMethod,
-    paymentMethod: order.paymentMethod,
-    ...(order.promoCode ? { promoCode: order.promoCode } : {}),
-    items: order.items.map(({ productId, variantId, quantity }) => ({
-      productId,
-      variantId,
-      quantity,
+  const orderRequest: Order = {
+    ...order,
+    paymentReference: undefined,
+    paymentStatus: 'awaiting_admin_review',
+    orderStatus: 'Chờ duyệt giá và tồn kho',
+    estimatedDelivery: '',
+    subtotal: 0,
+    discount: 0,
+    shippingFee: 0,
+    total: 0,
+    items: order.items.map((item) => ({
+      ...item,
+      unitPrice: 0,
     })),
   };
-  const createCustomerOrder = httpsCallable<typeof orderInput, Order>(
-    functions,
-    'createCustomerOrder'
-  );
-  const { data: savedOrder } = await createCustomerOrder(orderInput);
+  delete orderRequest.paymentReference;
+  await setDoc(doc(db, 'orders', order.orderNumber), orderRequest);
 
-  saveLocalOrder(savedOrder);
-  if (!savedOrder.customerUid) {
-    throw new Error('Đơn hàng trả về không có mã tài khoản khách hàng.');
+  saveLocalOrder(orderRequest);
+  rememberCustomerOrderId(customerUid, orderRequest.orderNumber);
+  rememberPendingCustomerOrder(orderRequest);
+  return orderRequest;
+}
+
+export async function approveStoreOrder(
+  orderNumber: string,
+  products: Product[]
+): Promise<Order> {
+  const db = getFirestoreInstance();
+  const sourceOrder = db
+    ? await getDoc(doc(db, 'orders', orderNumber)).then((snapshot) => {
+        if (!snapshot.exists()) throw new Error('Không tìm thấy đơn hàng.');
+        return snapshot.data() as Order;
+      })
+    : readLocalOrders().find((order) => order.orderNumber === orderNumber);
+  if (!sourceOrder) throw new Error('Không tìm thấy đơn hàng.');
+  if (
+    sourceOrder.paymentStatus !== 'awaiting_admin_review' ||
+    sourceOrder.orderStatus !== 'Chờ duyệt giá và tồn kho'
+  ) {
+    throw new Error('Đơn hàng này đã được duyệt hoặc không còn chờ duyệt.');
   }
-  rememberCustomerOrderId(savedOrder.customerUid, savedOrder.orderNumber);
-  rememberPendingCustomerOrder(savedOrder);
-  return savedOrder;
+  if (!['standard', 'express'].includes(sourceOrder.shippingMethod)) {
+    throw new Error('Phương thức giao hàng của đơn hàng không hợp lệ.');
+  }
+  if (!['vietqr', 'cod'].includes(sourceOrder.paymentMethod)) {
+    throw new Error('Chỉ hỗ trợ chuyển khoản VietQR hoặc COD.');
+  }
+  if (
+    sourceOrder.promoCode &&
+    !['MOCDAT10', 'FREESHIP'].includes(sourceOrder.promoCode)
+  ) {
+    throw new Error('Mã ưu đãi của đơn hàng không hợp lệ.');
+  }
+  if (
+    !Array.isArray(sourceOrder.items) ||
+    sourceOrder.items.length === 0 ||
+    sourceOrder.items.length > 30
+  ) {
+    throw new Error('Danh sách sản phẩm của đơn hàng không hợp lệ.');
+  }
+
+  const productsById = new Map(products.map((product) => [product.id, product]));
+  const requestedStock = new Map<string, number>();
+  const items = sourceOrder.items.map((item) => {
+    if (
+      typeof item.productId !== 'string' ||
+      typeof item.variantId !== 'string' ||
+      !Number.isSafeInteger(item.quantity) ||
+      item.quantity < 1 ||
+      item.quantity > 30
+    ) {
+      throw new Error('Sản phẩm trong đơn hàng không hợp lệ.');
+    }
+    const product = productsById.get(item.productId);
+    const variant = product?.variants.find(
+      (candidate) => candidate.id === item.variantId
+    );
+    if (!product || !variant || product.inStock === false) {
+      throw new Error('Có sản phẩm không còn trong danh mục hiện tại.');
+    }
+    const stockKey = `${item.productId}\u0000${item.variantId}`;
+    requestedStock.set(
+      stockKey,
+      (requestedStock.get(stockKey) ?? 0) + item.quantity
+    );
+    if (
+      !Number.isSafeInteger(product.price) ||
+      !Number.isSafeInteger(variant.priceDelta ?? 0) ||
+      product.price + (variant.priceDelta ?? 0) < 0
+    ) {
+      throw new Error(`Giá sản phẩm "${product.name}" chưa hợp lệ.`);
+    }
+    return {
+      productId: product.id,
+      variantId: variant.id,
+      name: product.name,
+      category: product.category,
+      variantLabel: variant.label,
+      unitPrice: product.price + (variant.priceDelta ?? 0),
+      quantity: item.quantity,
+      image: product.image,
+    };
+  });
+  for (const [stockKey, quantity] of requestedStock) {
+    const [productId, variantId] = stockKey.split('\u0000');
+    const variant = productsById
+      .get(productId)
+      ?.variants.find((candidate) => candidate.id === variantId);
+    if (!variant || !Number.isSafeInteger(variant.stock) || variant.stock < quantity) {
+      throw new Error('Số lượng đặt vượt quá tồn kho hiện tại.');
+    }
+  }
+
+  const subtotal = items.reduce(
+    (sum, item) => sum + item.unitPrice * item.quantity,
+    0
+  );
+  if (!Number.isSafeInteger(subtotal)) {
+    throw new Error('Tổng tiền đơn hàng vượt giới hạn hợp lệ.');
+  }
+  const discount =
+    sourceOrder.promoCode === 'MOCDAT10' ? Math.round(subtotal * 0.1) : 0;
+  const shippingFee =
+    sourceOrder.shippingMethod === 'express'
+      ? 65000
+      : sourceOrder.promoCode === 'FREESHIP' ||
+          subtotal - discount >= 1500000
+        ? 0
+        : 35000;
+  const total = subtotal - discount + shippingFee;
+  const now = new Date();
+  const deliveryDate = new Date(
+    now.getTime() +
+      (sourceOrder.shippingMethod === 'express' ? 1 : 3) * 24 * 60 * 60 * 1000
+  );
+  const approvedOrder: Order = {
+    ...sourceOrder,
+    items,
+    subtotal,
+    discount,
+    shippingFee,
+    total,
+    orderStatus: 'Chờ xác nhận',
+    paymentStatus:
+      sourceOrder.paymentMethod === 'vietqr'
+        ? 'pending_payment'
+        : 'Thanh toán khi nhận hàng',
+    ...(sourceOrder.paymentMethod === 'vietqr'
+      ? { paymentReference: sourceOrder.orderNumber }
+      : {}),
+    estimatedDelivery: deliveryDate.toLocaleDateString('vi-VN', {
+      weekday: 'long',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }),
+  };
+  if (db) {
+    await updateDoc(doc(db, 'orders', orderNumber), approvedOrder);
+  }
+  saveLocalOrder(approvedOrder);
+  return approvedOrder;
 }
 
 export async function submitCustomerOrderPayment(
@@ -456,41 +587,39 @@ export async function confirmStoreOrderPayment(
   received: boolean,
   note?: string
 ): Promise<void> {
-  const functions = getFirebaseFunctionsInstance();
-  if (!functions) {
-    if (getFirestoreInstance()) {
-      throw new Error('Dịch vụ xác nhận thanh toán Firebase chưa được cấu hình.');
-    }
-    const order = readLocalOrders().find(
-      (cachedOrder) => cachedOrder.orderNumber === orderNumber
-    );
-    if (!order) throw new Error('Không tìm thấy đơn hàng cần cập nhật.');
-    const paymentStatus = received ? 'paid' : 'pending_payment';
-    saveLocalOrder({
-      ...order,
-      paymentStatus,
-      ...(received ? { paymentNote: undefined } : { paymentNote: note }),
-    });
-    return;
+  if (!received && (!note?.trim() || note.trim().length > 500)) {
+    throw new Error('Vui lòng nhập ghi chú khi chưa nhận được tiền.');
   }
-
-  const confirmPayment = httpsCallable<
-    { orderNumber: string; received: boolean; note?: string },
-    { orderNumber: string; paymentStatus: Order['paymentStatus'] }
-  >(functions, 'confirmCustomerOrderPayment');
-  const { data } = await confirmPayment({
-    orderNumber,
-    received,
-    ...(note ? { note } : {}),
-  });
+  const paymentStatus = received ? 'paid' : 'pending_payment';
+  const db = getFirestoreInstance();
+  const paymentConfirmedAt = new Date().toISOString();
+  const paymentReviewedAt = new Date().toISOString();
+  if (db) {
+    await updateDoc(
+      doc(db, 'orders', orderNumber),
+      received
+        ? {
+            paymentStatus,
+            paymentConfirmedAt,
+            paymentNote: deleteField(),
+          }
+        : {
+            paymentStatus,
+            paymentNote: note?.trim(),
+            paymentReviewedAt,
+          }
+    );
+  }
   const order = readLocalOrders().find(
     (cachedOrder) => cachedOrder.orderNumber === orderNumber
   );
   if (order) {
     saveLocalOrder({
       ...order,
-      paymentStatus: data.paymentStatus,
-      ...(received ? { paymentNote: undefined } : { paymentNote: note }),
+      paymentStatus,
+      ...(received
+        ? { paymentNote: undefined, paymentConfirmedAt }
+        : { paymentNote: note?.trim(), paymentReviewedAt }),
     });
   }
 }
