@@ -1,4 +1,8 @@
-const ORDER_NUMBER_PATTERN = /^MD-\d{13}-\d{4}$/;
+const ORDER_NUMBER_PATTERN = /^VSI-\d{13}-\d{4}$/;
+
+function isValidOrderNumber(orderNumber) {
+  return ORDER_NUMBER_PATTERN.test(orderNumber);
+}
 
 class OrderValidationError extends Error {
   constructor(code, message) {
@@ -49,7 +53,7 @@ function buildTrustedOrder(input, customerUid, productsById, now, paymentReferen
   }
 
   const orderNumber = requiredText(input.orderNumber, 'mã đơn hàng', 32);
-  if (!ORDER_NUMBER_PATTERN.test(orderNumber)) {
+  if (!isValidOrderNumber(orderNumber)) {
     throw new OrderValidationError('invalid-argument', 'Mã đơn hàng không hợp lệ.');
   }
 
@@ -197,4 +201,5 @@ module.exports = {
   OrderValidationError,
   buildTrustedOrder,
   getConfirmedPaymentStatus,
+  isValidOrderNumber,
 };

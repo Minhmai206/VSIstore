@@ -10,9 +10,14 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { INITIAL_ORDERS } from '../data/products';
 import { Order, OrderStatus, Product } from '../types/shop';
-import { getFirestoreInstance, isFirebaseConfigured } from './firebaseConfig';
+import {
+  getFirebaseFunctionsInstance,
+  getFirestoreInstance,
+  isFirebaseConfigured,
+} from './firebaseConfig';
 
 const ORDERS_STORAGE_KEY = 'moc_dat_orders_v1';
 const PRODUCTS_STORAGE_KEY = 'moc_dat_products_v1';
@@ -222,11 +227,43 @@ export async function createStoreOrder(order: Order): Promise<Order> {
     throw new Error('Vui lòng đăng nhập tài khoản khách hàng trước khi đặt đơn.');
   }
 
-  const db = getFirestoreInstance();
-  let savedOrder = order;
-  if (db) await setDoc(doc(db, 'orders', order.orderNumber), order);
+  const functions = getFirebaseFunctionsInstance();
+  if (!functions) {
+    if (getFirestoreInstance()) {
+      throw new Error('Dịch vụ tạo đơn Firebase chưa được cấu hình.');
+    }
+    writeLocalOrders([order, ...readLocalOrders()]);
+    return order;
+  }
 
-  writeLocalOrders([savedOrder, ...readLocalOrders()]);
+  const orderInput = {
+    orderNumber: order.orderNumber,
+    customerName: order.customerName,
+    phone: order.phone,
+    email: order.email,
+    address: order.address,
+    city: order.city,
+    shippingMethod: order.shippingMethod,
+    paymentMethod: order.paymentMethod,
+    ...(order.promoCode ? { promoCode: order.promoCode } : {}),
+    items: order.items.map(({ productId, variantId, quantity }) => ({
+      productId,
+      variantId,
+      quantity,
+    })),
+  };
+  const createCustomerOrder = httpsCallable<typeof orderInput, Order>(
+    functions,
+    'createCustomerOrder'
+  );
+  const { data: savedOrder } = await createCustomerOrder(orderInput);
+
+  writeLocalOrders([
+    savedOrder,
+    ...readLocalOrders().filter(
+      (cachedOrder) => cachedOrder.orderNumber !== savedOrder.orderNumber
+    ),
+  ]);
   return savedOrder;
 }
 

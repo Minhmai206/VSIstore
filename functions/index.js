@@ -8,6 +8,7 @@ const {
   OrderValidationError,
   buildTrustedOrder,
   getConfirmedPaymentStatus,
+  isValidOrderNumber,
 } = require('./order');
 const {
   extractPaymentReference,
@@ -103,10 +104,7 @@ exports.confirmCustomerOrderPayment = onCall(
     }
 
     const { orderNumber } = request.data ?? {};
-    if (
-      typeof orderNumber !== 'string' ||
-      !/^MD-\d{13}-\d{4}$/.test(orderNumber)
-    ) {
+    if (typeof orderNumber !== 'string' || !isValidOrderNumber(orderNumber)) {
       throw new HttpsError('invalid-argument', 'Mã đơn hàng không hợp lệ.');
     }
 

@@ -20,7 +20,7 @@ const catalog = new Map([
 ]);
 
 const request = {
-  orderNumber: 'MD-1710000000000-1234',
+  orderNumber: 'VSI-1710000000000-1234',
   customerName: 'Nguyễn An',
   phone: '0912345678',
   email: 'an@example.com',
@@ -62,6 +62,20 @@ test('rejects orders whose requested quantity exceeds the catalog stock', () => 
         'VSI12345678901230001'
       ),
     (error) => error.code === 'failed-precondition'
+  );
+});
+
+test('rejects order numbers from the previous prefix', () => {
+  assert.throws(
+    () =>
+      buildTrustedOrder(
+        { ...request, orderNumber: 'MD-1710000000000-1234' },
+        'customer-uid',
+        catalog,
+        new Date(),
+        'VSI12345678901230001'
+      ),
+    (error) => error.code === 'invalid-argument'
   );
 });
 
