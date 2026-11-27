@@ -3,6 +3,7 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   query,
   setDoc,
@@ -14,7 +15,66 @@ import { Order, OrderStatus, Product } from '../types/shop';
 import { getFirestoreInstance, isFirebaseConfigured } from './firebaseConfig';
 
 const ORDERS_STORAGE_KEY = 'moc_dat_orders_v1';
+const PRODUCTS_STORAGE_KEY = 'moc_dat_products_v1';
 export type StorageBackendMode = 'firebase' | 'localhost';
+
+function isCachedProduct(value: unknown): value is Product {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const product = value as Record<string, unknown>;
+  return (
+    typeof product.id === 'string' &&
+    typeof product.sku === 'string' &&
+    typeof product.name === 'string' &&
+    typeof product.category === 'string' &&
+    typeof product.village === 'string' &&
+    typeof product.material === 'string' &&
+    typeof product.price === 'number' &&
+    typeof product.image === 'string' &&
+    typeof product.shortDesc === 'string' &&
+    typeof product.story === 'string' &&
+    typeof product.dimensions === 'string' &&
+    typeof product.careGuide === 'string' &&
+    typeof product.artisanName === 'string' &&
+    typeof product.craftDays === 'number' &&
+    typeof product.rating === 'number' &&
+    typeof product.reviewCount === 'number' &&
+    typeof product.availabilityTag === 'string' &&
+    typeof product.inStock === 'boolean' &&
+    typeof product.featuredRank === 'number' &&
+    Array.isArray(product.keywords) &&
+    Array.isArray(product.variants)
+  );
+}
+
+export function readCachedStoreProducts(): Product[] | null {
+  try {
+    const raw = localStorage.getItem(PRODUCTS_STORAGE_KEY);
+    if (!raw) return null;
+
+    const cached: unknown = JSON.parse(raw);
+    if (!Array.isArray(cached) || !cached.every(isCachedProduct)) {
+      localStorage.removeItem(PRODUCTS_STORAGE_KEY);
+      console.warn('Ignoring an invalid cached product list.');
+      return null;
+    }
+
+    return sortProducts(cached);
+  } catch (error) {
+    console.warn('Could not read cached products; loading from Firestore.', error);
+    return null;
+  }
+}
+
+export function writeCachedStoreProducts(products: Product[]): void {
+  try {
+    localStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(products));
+  } catch (error) {
+    console.warn('Could not persist the product cache.', error);
+  }
+}
 
 export function getStorageBackendMode(): StorageBackendMode {
   return isFirebaseConfigured() ? 'firebase' : 'localhost';
@@ -55,8 +115,12 @@ export async function fetchStoreProducts(): Promise<Product[]> {
     throw new Error('Firebase Firestore chưa được cấu hình.');
   }
 
-  const snapshot = await getDocs(collection(db, 'products'));
-  return sortProducts(snapshot.docs.map((item) => item.data() as Product));
+  const snapshot = await getDocsFromServer(collection(db, 'products'));
+  const products = sortProducts(
+    snapshot.docs.map((item) => item.data() as Product)
+  );
+  writeCachedStoreProducts(products);
+  return products;
 }
 
 export async function initializeAdminProducts(): Promise<Product[]> {

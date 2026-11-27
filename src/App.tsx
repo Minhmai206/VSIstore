@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, X } from 'lucide-react';
-import { AdminDashboard } from './components/AdminDashboard';
 import {
   CartCheckoutDrawer,
   DrawerStep,
@@ -34,6 +33,8 @@ import {
   observeCustomerOrders,
   saveStoreProduct,
   updateStoreOrderStatus,
+  readCachedStoreProducts,
+  writeCachedStoreProducts,
 } from './services/storeRepository';
 import {
   CustomerProfile,
@@ -51,6 +52,11 @@ import {
 } from './types/shop';
 
 const CART_STORAGE_KEY = 'moc_dat_cart_v1';
+const AdminDashboard = lazy(() =>
+  import('./components/AdminDashboard').then(({ AdminDashboard: component }) => ({
+    default: component,
+  }))
+);
 
 const DEFAULT_FILTERS: FilterState = {
   query: '',
@@ -78,7 +84,12 @@ export default function App() {
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [products, setProducts] = useState<Product[]>([]);
+  const [initialCachedProducts] = useState<Product[] | null>(
+    () => readCachedStoreProducts()
+  );
+  const [products, setProducts] = useState<Product[]>(
+    () => initialCachedProducts ?? []
+  );
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsLoadError, setProductsLoadError] = useState<string | null>(null);
   const [productsReloadKey, setProductsReloadKey] = useState(0);
@@ -111,7 +122,6 @@ export default function App() {
       .catch((error: unknown) => {
         if (!active) return;
         console.error('Không thể tải sản phẩm:', error);
-        setProducts([]);
         setProductsLoadError(
           error instanceof Error
             ? error.message
@@ -322,17 +332,28 @@ export default function App() {
     await saveStoreProduct(updatedProduct);
     setProducts((prev) => {
       const exists = prev.some((p) => p.id === updatedProduct.id);
-      if (exists) {
-        return prev.map((p) => (p.id === updatedProduct.id ? updatedProduct : p));
-      }
-      return [updatedProduct, ...prev];
+      const next = exists
+        ? prev.map((p) => (p.id === updatedProduct.id ? updatedProduct : p))
+        : [updatedProduct, ...prev];
+      writeCachedStoreProducts(next);
+      return next;
     });
   };
 
   const handleDeleteProduct = async (productId: string) => {
     await deleteStoreProduct(productId);
-    setProducts((prev) => prev.filter((p) => p.id !== productId));
+    setProducts((prev) => {
+      const next = prev.filter((p) => p.id !== productId);
+      writeCachedStoreProducts(next);
+      return next;
+    });
     setCart((prev) => prev.filter((item) => item.productId !== productId));
+  };
+
+  const handleRetryProducts = () => {
+    setProductsLoadError(null);
+    setProductsLoading(true);
+    setProductsReloadKey((key) => key + 1);
   };
 
   const handleUpdateOrderStatus = async (
@@ -411,20 +432,31 @@ export default function App() {
 
   if (view === 'admin' && adminUnlocked) {
     return (
-      <AdminDashboard
-        products={products}
-        orders={adminOrders}
-        onBackToStore={() => {
-          void handleAdminExit();
-        }}
-        onLockAdmin={() => {
-          void handleAdminExit();
-        }}
-        onSaveProduct={handleSaveProduct}
-        onDeleteProduct={handleDeleteProduct}
-        onUpdateOrderStatus={handleUpdateOrderStatus}
-        onConfirmOrderPayment={handleConfirmOrderPayment}
-      />
+      <Suspense
+        fallback={
+          <div
+            className="flex min-h-screen items-center justify-center bg-[#F8F4EE] text-sm text-[#5E4B3C]"
+            role="status"
+          >
+            Đang tải trang quản trị...
+          </div>
+        }
+      >
+        <AdminDashboard
+          products={products}
+          orders={adminOrders}
+          onBackToStore={() => {
+            void handleAdminExit();
+          }}
+          onLockAdmin={() => {
+            void handleAdminExit();
+          }}
+          onSaveProduct={handleSaveProduct}
+          onDeleteProduct={handleDeleteProduct}
+          onUpdateOrderStatus={handleUpdateOrderStatus}
+          onConfirmOrderPayment={handleConfirmOrderPayment}
+        />
+      </Suspense>
     );
   }
 
@@ -460,7 +492,7 @@ export default function App() {
           productsLoading={productsLoading}
           productsLoadError={productsLoadError}
           filters={filters}
-          onRetryProducts={() => setProductsReloadKey((key) => key + 1)}
+          onRetryProducts={handleRetryProducts}
           onUpdateFilters={handleUpdateFilters}
           onResetFilters={handleResetFilters}
           onSelectProduct={(product) => setSelectedProduct(product)}
