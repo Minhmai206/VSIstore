@@ -2,12 +2,12 @@ const { initializeApp } = require('firebase-admin/app');
 const { FieldValue, getFirestore } = require('firebase-admin/firestore');
 const { logger } = require('firebase-functions');
 const { defineSecret } = require('firebase-functions/params');
-const { randomInt } = require('node:crypto');
 const { HttpsError, onCall, onRequest } = require('firebase-functions/v2/https');
 const {
   OrderValidationError,
+  buildAdminPaymentUpdate,
   buildTrustedOrder,
-  getConfirmedPaymentStatus,
+  isValidOrderNumber,
 } = require('./order');
 const {
   extractPaymentReference,
@@ -56,9 +56,7 @@ exports.createCustomerOrder = onCall(
       ).values(),
     ];
     const paymentReference =
-      input.paymentMethod === 'vietqr'
-        ? `VSI${Date.now()}${randomInt(1000, 10000)}`
-        : undefined;
+      input.paymentMethod === 'vietqr' ? input.orderNumber : undefined;
     let savedOrder;
 
     try {
@@ -102,12 +100,18 @@ exports.confirmCustomerOrderPayment = onCall(
       throw new HttpsError('unauthenticated', 'Vui lòng đăng nhập tài khoản quản trị.');
     }
 
-    const { orderNumber } = request.data ?? {};
+    const { orderNumber, received, note } = request.data ?? {};
     if (
       typeof orderNumber !== 'string' ||
-      !/^MD-\d{13}-\d{4}$/.test(orderNumber)
+      !isValidOrderNumber(orderNumber) ||
+      typeof received !== 'boolean' ||
+      (!received &&
+        (typeof note !== 'string' || !note.trim() || note.trim().length > 500))
     ) {
-      throw new HttpsError('invalid-argument', 'Mã đơn hàng không hợp lệ.');
+      throw new HttpsError(
+        'invalid-argument',
+        'Mã đơn hàng hoặc kết quả đối chiếu không hợp lệ.'
+      );
     }
 
     const db = getFirestore();
@@ -124,20 +128,25 @@ exports.confirmCustomerOrderPayment = onCall(
 
     const orderRef = db.collection('orders').doc(orderNumber);
     try {
-      const paymentStatus = await db.runTransaction(async (transaction) => {
+      const paymentUpdate = await db.runTransaction(async (transaction) => {
         const orderSnapshot = await transaction.get(orderRef);
         if (!orderSnapshot.exists) {
           throw new HttpsError('not-found', 'Không tìm thấy đơn hàng.');
         }
 
-        const status = getConfirmedPaymentStatus(orderSnapshot.data());
-        if (status !== orderSnapshot.data().paymentStatus) {
-          transaction.update(orderRef, { paymentStatus: status });
-        }
-        return status;
+        const update = buildAdminPaymentUpdate(
+          orderSnapshot.data(),
+          received,
+          note
+        );
+        transaction.update(orderRef, {
+          ...update,
+          ...(received ? { paymentNote: FieldValue.delete() } : {}),
+        });
+        return update;
       });
 
-      return { orderNumber, paymentStatus };
+      return { orderNumber, ...paymentUpdate };
     } catch (error) {
       if (error instanceof HttpsError) throw error;
       if (error instanceof OrderValidationError) {
@@ -250,13 +259,17 @@ exports.sepayWebhook = onRequest(
               status = 'not_vietqr_order';
             } else if (order.orderStatus === 'Đã hủy') {
               status = 'order_cancelled';
-            } else if (order.paymentStatus !== 'Chờ xác nhận thanh toán') {
+            } else if (
+              !['pending_payment', 'awaiting_confirmation'].includes(order.paymentStatus)
+            ) {
               status = 'payment_not_pending';
             } else if (order.total !== payload.transferAmount) {
               status = 'amount_mismatch';
             } else {
               transaction.update(orderRef, {
-                paymentStatus: 'Đã xác nhận chuyển khoản',
+                paymentStatus: 'paid',
+                paymentConfirmedAt: new Date().toISOString(),
+                paymentNote: FieldValue.delete(),
               });
               status = 'paid';
             }

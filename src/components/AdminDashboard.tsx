@@ -1,4 +1,4 @@
-import { SyntheticEvent, useMemo, useRef, useState } from 'react';
+import { SyntheticEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -14,6 +14,7 @@ import {
   Search,
   Settings,
   Trash2,
+  Users,
   Upload,
   X,
 } from 'lucide-react';
@@ -23,16 +24,24 @@ import {
   MATERIALS_LIST,
   STUDIO_IMAGE_PRESETS,
 } from '../data/products';
+import { SITE_CONFIG } from '../config/site';
 import { getStorageBackendMode } from '../services/storeRepository';
-import { Order, OrderStatus, Product, ProductVariant } from '../types/shop';
 import {
+  Order,
+  OrderStatus,
+  Product,
+  ProductSpecification,
+  ProductVariant,
+} from '../types/shop';
+import {
+  formatAddressWithCity,
   formatOrderDate,
   formatVND,
   removeVietnameseDiacritics,
 } from '../utils/format';
 import { ResilientImage } from './ResilientImage';
 
-type AdminTab = 'overview' | 'products' | 'orders' | 'settings';
+type AdminTab = 'overview' | 'products' | 'orders' | 'customers' | 'settings';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -45,10 +54,17 @@ interface AdminDashboardProps {
     orderNumber: string,
     status: OrderStatus
   ) => Promise<void> | void;
-  onConfirmOrderPayment: (orderNumber: string) => Promise<void> | void;
+  onConfirmOrderPayment: (
+    orderNumber: string,
+    received: boolean,
+    note?: string
+  ) => Promise<void> | void;
+  onApproveOrder: (orderNumber: string) => Promise<Order>;
+  onClearAllOrders: () => Promise<void> | void;
 }
 
 const ORDER_STATUS_OPTIONS: OrderStatus[] = [
+  'Chờ duyệt giá và tồn kho',
   'Chờ xác nhận',
   'Đang đóng gói chống sốc',
   'Đang giao hàng',
@@ -69,6 +85,7 @@ interface DetailedProductFormState {
   dimensions: string;
   weight: string;
   artisanName: string;
+  specifications: ProductSpecification[];
   shortDesc: string;
   story: string;
   careGuide: string;
@@ -91,9 +108,10 @@ function createEmptyProductForm(nextIndex: number): DetailedProductFormState {
     price: 750000,
     originalPrice: 0,
     craftDays: 10,
-    dimensions: 'Cao 22 cm × Đường kính 12 cm',
-    weight: '1.2 kg (đã gồm hộp bảo vệ)',
-    artisanName: 'Nghệ nhân Nguyễn Văn Minh',
+    dimensions: '',
+    weight: '',
+    artisanName: '',
+    specifications: [],
     shortDesc: '',
     story: '',
     careGuide: 'Lau nhẹ bằng khăn mềm ẩm, tránh va đập mạnh và hóa chất tẩy.',
@@ -173,6 +191,33 @@ function optimizeLocalImageFile(file: File): Promise<string> {
   });
 }
 
+function parseOrderDate(value: string): Date | null {
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (isoMatch) {
+    return new Date(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]) - 1,
+      Number(isoMatch[3])
+    );
+  }
+  const localMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(value);
+  if (localMatch) {
+    return new Date(
+      Number(localMatch[3]),
+      Number(localMatch[2]) - 1,
+      Number(localMatch[1])
+    );
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getMonthKey(value: string): string {
+  const date = parseOrderDate(value);
+  if (!date) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export function AdminDashboard({
   products,
   orders,
@@ -182,13 +227,22 @@ export function AdminDashboard({
   onDeleteProduct,
   onUpdateOrderStatus,
   onConfirmOrderPayment,
+  onApproveOrder,
+  onClearAllOrders,
 }: AdminDashboardProps) {
+  const fieldId = useId().replace(/:/g, '');
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [productQuery, setProductQuery] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] =
     useState<string>('Tất Cả');
   const [orderQuery, setOrderQuery] = useState('');
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>('Tất cả');
+  const [overviewMonth, setOverviewMonth] = useState('all');
+  const [clearOrdersBusy, setClearOrdersBusy] = useState(false);
+  const [orderDateFrom, setOrderDateFrom] = useState('');
+  const [orderDateTo, setOrderDateTo] = useState('');
+  const [orderPage, setOrderPage] = useState(1);
+  const ORDERS_PAGE_SIZE = 20;
 
   const [editingProductModalOpen, setEditingProductModalOpen] = useState(false);
   const [productForm, setProductForm] = useState<DetailedProductFormState>(() =>
@@ -198,6 +252,8 @@ export function AdminDashboard({
   const [productActionError, setProductActionError] = useState('');
   const [orderActionError, setOrderActionError] = useState('');
   const [paymentConfirming, setPaymentConfirming] = useState(false);
+  const [approvingOrder, setApprovingOrder] = useState(false);
+  const [paymentRejectionNote, setPaymentRejectionNote] = useState('');
   const [uploadingImages, setUploadingImages] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -208,9 +264,23 @@ export function AdminDashboard({
   const storageMode = getStorageBackendMode();
 
   const metrics = useMemo(() => {
-    const validOrders = orders.filter((o) => o.orderStatus !== 'Đã hủy');
+    const baseValidOrders = orders.filter(
+      (order) =>
+        order.orderStatus !== 'Đã hủy' &&
+        order.paymentStatus !== 'awaiting_admin_review'
+    );
+    const validOrders =
+      overviewMonth === 'all'
+        ? baseValidOrders
+        : baseValidOrders.filter(
+            (order) => getMonthKey(order.createdAt) === overviewMonth
+          );
     const totalRevenue = validOrders.reduce((sum, o) => sum + o.total, 0);
-    const totalOrders = orders.length;
+    const totalOrders =
+      overviewMonth === 'all'
+        ? orders.length
+        : orders.filter((order) => getMonthKey(order.createdAt) === overviewMonth)
+            .length;
     const avgOrderValue =
       validOrders.length > 0 ? Math.round(totalRevenue / validOrders.length) : 0;
     const totalStockUnits = products.reduce(
@@ -240,6 +310,32 @@ export function AdminDashboard({
 
     const maxProductRevenue = Math.max(1, ...Object.values(productRevenue));
 
+    const now = new Date();
+    const monthlyData = Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - 11 + index, 1);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const monthOrders = baseValidOrders.filter(
+        (order) => getMonthKey(order.createdAt) === key
+      );
+      return {
+        key,
+        label: date.toLocaleDateString('vi-VN', {
+          month: '2-digit',
+          year: '2-digit',
+        }),
+        revenue: monthOrders.reduce((sum, order) => sum + order.total, 0),
+        orderCount: monthOrders.length,
+      };
+    });
+
+    const monthOptions = Array.from(
+      new Set(
+        orders
+          .map((order) => getMonthKey(order.createdAt))
+          .filter((key) => key.length > 0)
+      )
+    ).sort((a, b) => b.localeCompare(a));
+
     return {
       totalRevenue,
       totalOrders,
@@ -247,8 +343,10 @@ export function AdminDashboard({
       totalStockUnits,
       productRevenue,
       maxProductRevenue,
+      monthlyData,
+      monthOptions,
     };
-  }, [orders, products]);
+  }, [orders, products, overviewMonth]);
 
   const filteredProducts = useMemo(() => {
     const q = removeVietnameseDiacritics(productQuery);
@@ -273,13 +371,61 @@ export function AdminDashboard({
       if (orderStatusFilter !== 'Tất cả' && o.orderStatus !== orderStatusFilter) {
         return false;
       }
+      if (orderDateFrom) {
+        const createdDate = o.createdAt.slice(0, 10);
+        if (createdDate < orderDateFrom) return false;
+      }
+      if (orderDateTo) {
+        const createdDate = o.createdAt.slice(0, 10);
+        if (createdDate > orderDateTo) return false;
+      }
       if (!q) return true;
       const hay = removeVietnameseDiacritics(
         `${o.orderNumber} ${o.customerName} ${o.phone} ${o.city}`
       );
       return hay.includes(q);
     });
-  }, [orders, orderQuery, orderStatusFilter]);
+  }, [orders, orderQuery, orderStatusFilter, orderDateFrom, orderDateTo]);
+
+  useEffect(() => {
+    setOrderPage(1);
+  }, [orderQuery, orderStatusFilter, orderDateFrom, orderDateTo]);
+
+  const pagedOrders = useMemo(() => {
+    const start = (orderPage - 1) * ORDERS_PAGE_SIZE;
+    return filteredOrders.slice(start, start + ORDERS_PAGE_SIZE);
+  }, [filteredOrders, orderPage]);
+  const totalOrderPages = Math.max(
+    1,
+    Math.ceil(filteredOrders.length / ORDERS_PAGE_SIZE)
+  );
+  const customers = useMemo(() => {
+    const grouped = new Map<
+      string,
+      { key: string; name: string; phone: string; email: string; orders: number; total: number }
+    >();
+    for (const order of orders) {
+      const key =
+        order.email.trim().toLowerCase() ||
+        order.phone.replace(/\s+/g, '');
+      if (!key) continue;
+      const current = grouped.get(key);
+      if (current) {
+        current.orders += 1;
+        current.total += order.total;
+      } else {
+        grouped.set(key, {
+          key,
+          name: order.customerName,
+          phone: order.phone,
+          email: order.email,
+          orders: 1,
+          total: order.total,
+        });
+      }
+    }
+    return [...grouped.values()].sort((a, b) => b.total - a.total);
+  }, [orders]);
 
   const openCreateProduct = () => {
     setProductForm(createEmptyProductForm(products.length + 1));
@@ -305,6 +451,7 @@ export function AdminDashboard({
       dimensions: product.dimensions,
       weight: product.weight ?? '',
       artisanName: product.artisanName,
+      specifications: product.specifications ?? [],
       shortDesc: product.shortDesc,
       story: product.story,
       careGuide: product.careGuide,
@@ -360,16 +507,28 @@ export function AdminDashboard({
     }
   };
 
-  const handleConfirmOrderPayment = async (orderNumber: string) => {
+  const handleConfirmOrderPayment = async (
+    orderNumber: string,
+    received: boolean
+  ) => {
     setOrderActionError('');
     setPaymentConfirming(true);
     try {
-      await onConfirmOrderPayment(orderNumber);
+      await onConfirmOrderPayment(
+        orderNumber,
+        received,
+        received ? undefined : paymentRejectionNote
+      );
       setInspectingOrder((current) =>
         current
-          ? { ...current, paymentStatus: 'Đã xác nhận chuyển khoản' }
+          ? {
+              ...current,
+              paymentStatus: received ? 'paid' : 'pending_payment',
+              ...(received ? {} : { paymentNote: paymentRejectionNote }),
+            }
           : current
       );
+      setPaymentRejectionNote('');
     } catch (error) {
       setOrderActionError(
         error instanceof Error
@@ -378,6 +537,47 @@ export function AdminDashboard({
       );
     } finally {
       setPaymentConfirming(false);
+    }
+  };
+
+  const handleClearAllOrders = async () => {
+    if (
+      !window.confirm(
+        'Làm sạch toàn bộ dữ liệu đơn hàng và doanh thu? Thao tác này không thể hoàn tác.'
+      )
+    ) {
+      return;
+    }
+    setClearOrdersBusy(true);
+    setOrderActionError('');
+    try {
+      await onClearAllOrders();
+      setOverviewMonth('all');
+    } catch (error) {
+      setOrderActionError(
+        error instanceof Error
+          ? `Không thể làm sạch dữ liệu: ${error.message}`
+          : 'Không thể làm sạch dữ liệu. Vui lòng thử lại.'
+      );
+    } finally {
+      setClearOrdersBusy(false);
+    }
+  };
+
+  const handleApproveOrder = async (orderNumber: string) => {
+    setOrderActionError('');
+    setApprovingOrder(true);
+    try {
+      const approvedOrder = await onApproveOrder(orderNumber);
+      setInspectingOrder(approvedOrder);
+    } catch (error) {
+      setOrderActionError(
+        error instanceof Error
+          ? `Không thể xác nhận giá và tồn kho: ${error.message}`
+          : 'Không thể xác nhận giá và tồn kho. Vui lòng thử lại.'
+      );
+    } finally {
+      setApprovingOrder(false);
     }
   };
 
@@ -528,14 +728,25 @@ export function AdminDashboard({
         productForm.shortDesc.trim() ||
         `Chế Tác Tại Xưởng${productForm.village} từ ${productForm.material.toLowerCase()}.`,
       story:
-        productForm.story.trim() ||
-        `Tác phẩm hoàn thiện thủ công bởi ${productForm.artisanName}, giữ trọn sắc nâu be gần gũi và tinh thần Việt.`,
-      dimensions: productForm.dimensions.trim() || 'Theo quy cách xưởng',
+        productForm.story.trim(),
+      dimensions: productForm.dimensions.trim(),
       ...(weight ? { weight } : {}),
+      ...(productForm.specifications.some(
+        ({ label, value }) => label.trim() && value.trim()
+      )
+        ? {
+            specifications: productForm.specifications
+              .map(({ label, value }) => ({
+                label: label.trim(),
+                value: value.trim(),
+              }))
+              .filter(({ label, value }) => label && value),
+          }
+        : {}),
       careGuide:
         productForm.careGuide.trim() ||
         'Lau nhẹ bằng khăn mềm, giữ nơi khô thoáng.',
-      artisanName: productForm.artisanName.trim() || 'Nghệ nhân VSI',
+      artisanName: productForm.artisanName.trim(),
       craftDays: Math.max(1, Number(productForm.craftDays) || 7),
       rating: existing?.rating ?? 5.0,
       reviewCount: existing?.reviewCount ?? 1,
@@ -577,6 +788,7 @@ export function AdminDashboard({
     overview: 'Tổng quan hoạt động',
     products: 'Quản lý sản phẩm chi tiết',
     orders: 'Đơn hàng & Thanh toán',
+    customers: 'Danh sách khách hàng',
     settings: 'Cài đặt bảo mật & Firebase',
   };
 
@@ -588,7 +800,7 @@ export function AdminDashboard({
           <div className="flex items-center justify-between lg:block">
             <div>
               <p className="text-lg font-bold tracking-tight text-[#2B2018]">
-                VSI
+                {SITE_CONFIG.brandName}
               </p>
               <p className="text-xs text-[#867363] mt-0.5">
                 {storageMode === 'firebase'
@@ -646,7 +858,24 @@ export function AdminDashboard({
               }`}
             >
               <ClipboardList className="w-4 h-4" />
-              <span className="tabular-nums">Đơn hàng ({orders.length})</span>
+              <span className="tabular-nums">
+                Đơn hàng ({orders.length})
+                {orders.some((order) => order.orderStatus === 'Chờ duyệt giá và tồn kho') &&
+                  ` · cần duyệt ${orders.filter((order) => order.orderStatus === 'Chờ duyệt giá và tồn kho').length}`}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('customers')}
+              className={`inline-flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === 'customers'
+                  ? 'bg-[#073D63] text-[#FCF9F5]'
+                  : 'text-[#5E4B3C] hover:bg-[#EFE8DD] hover:text-[#2B2018]'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span className="tabular-nums">Khách hàng ({customers.length})</span>
             </button>
 
             <button
@@ -691,7 +920,7 @@ export function AdminDashboard({
         <header className="bg-[#FCF9F5] border-b border-[#E2D7C6] px-6 md:px-10 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-sm min-w-0">
             <span className="text-[#867363] hidden sm:inline">
-              Quản trị VSI
+              Quản trị {SITE_CONFIG.brandName}
             </span>
             <span className="text-[#867363] hidden sm:inline">/</span>
             <h1 className="font-semibold text-[#2B2018] truncate">
@@ -700,6 +929,32 @@ export function AdminDashboard({
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            {activeTab === 'overview' && (
+              <>
+                <select
+                  aria-label="Lọc thống kê theo tháng"
+                  value={overviewMonth}
+                  onChange={(event) => setOverviewMonth(event.target.value)}
+                  className="rounded-lg border border-[#E2D7C6] bg-white px-3 py-2 text-xs font-medium text-[#2B2018]"
+                >
+                  <option value="all">Tất cả các tháng</option>
+                  {metrics.monthOptions.map((month) => (
+                    <option key={month} value={month}>
+                      Tháng {month.slice(5)}/{month.slice(0, 4)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={clearOrdersBusy || orders.length === 0}
+                  onClick={() => void handleClearAllOrders()}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[#D8AFA7] px-3 py-2 text-xs font-medium text-[#9E3B2B] hover:bg-[#F5E4E1] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>{clearOrdersBusy ? 'Đang làm sạch...' : 'Làm sạch dữ liệu'}</span>
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={openCreateProduct}
@@ -761,6 +1016,63 @@ export function AdminDashboard({
                     Thuộc {products.length} dòng chế tác
                   </p>
                 </div>
+              </div>
+
+              <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl p-6">
+                <div className="mb-5 flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-[#2B2018]">
+                      Phân tích doanh thu theo tháng
+                    </h2>
+                    <p className="mt-0.5 text-xs text-[#867363]">
+                      12 tháng gần nhất · cột doanh thu, số đơn ghi trên mỗi cột
+                    </p>
+                  </div>
+                  {overviewMonth !== 'all' && (
+                    <span className="rounded-lg bg-[#F8F4EE] px-3 py-1.5 text-xs font-medium text-[#073D63]">
+                      Đang xem tháng {overviewMonth.slice(5)}/{overviewMonth.slice(0, 4)}
+                    </span>
+                  )}
+                </div>
+
+                {metrics.monthlyData.every((month) => month.revenue === 0) ? (
+                  <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-[#E2D7C6] text-sm text-[#867363]">
+                    Chưa có dữ liệu doanh thu để phân tích.
+                  </div>
+                ) : (
+                  <div className="h-64 overflow-x-auto">
+                    <div className="flex h-full min-w-[760px] items-end gap-3 border-b border-[#E2D7C6] px-2 pt-7">
+                      {metrics.monthlyData.map((month) => {
+                        const maxRevenue = Math.max(
+                          1,
+                          ...metrics.monthlyData.map((item) => item.revenue)
+                        );
+                        const height =
+                          month.revenue > 0
+                            ? Math.max(8, Math.round((month.revenue / maxRevenue) * 200))
+                            : 4;
+                        return (
+                          <div
+                            key={month.key}
+                            className="flex h-full min-w-12 flex-1 flex-col justify-end text-center"
+                          >
+                            <div className="mb-1 text-[11px] font-semibold text-[#073D63] tabular-nums">
+                              {month.orderCount > 0 ? `${month.orderCount} đơn` : ''}
+                            </div>
+                            <div
+                              title={`${month.label}: ${formatVND(month.revenue)} · ${month.orderCount} đơn`}
+                              className="mx-auto w-full max-w-10 rounded-t-md bg-[#073D63]"
+                              style={{ height }}
+                            />
+                            <div className="mt-2 h-8 text-[10px] text-[#867363]">
+                              {month.label}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -857,6 +1169,35 @@ export function AdminDashboard({
                       </table>
                     </div>
                   )}
+                  {filteredOrders.length > 0 && (
+                    <div className="flex items-center justify-between border-t border-[#E2D7C6] px-4 py-3 text-xs text-[#5E4B3C]">
+                      <span>
+                        Trang {orderPage}/{totalOrderPages} · {filteredOrders.length} đơn
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={orderPage <= 1}
+                          onClick={() => setOrderPage((page) => Math.max(1, page - 1))}
+                          className="rounded-lg border border-[#E2D7C6] px-3 py-1.5 disabled:opacity-40"
+                        >
+                          Trước
+                        </button>
+                        <button
+                          type="button"
+                          disabled={orderPage >= totalOrderPages}
+                          onClick={() =>
+                            setOrderPage((page) =>
+                              Math.min(totalOrderPages, page + 1)
+                            )
+                          }
+                          className="rounded-lg border border-[#E2D7C6] px-3 py-1.5 disabled:opacity-40"
+                        >
+                          Sau
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </>
@@ -867,9 +1208,15 @@ export function AdminDashboard({
             <div className="space-y-5">
               <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl p-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
                 <div className="relative flex-1 max-w-md">
+                  <label htmlFor={`${fieldId}-product-search`} className="sr-only">
+                    Tìm sản phẩm trong quản trị
+                  </label>
                   <Search className="w-4 h-4 text-[#867363] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
+                    id={`${fieldId}-product-search`}
+                    name="productSearch"
                     type="text"
+                    autoComplete="off"
                     value={productQuery}
                     onChange={(e) => setProductQuery(e.target.value)}
                     placeholder="Tìm sản phẩm theo tên, mã SKU, ..."
@@ -877,7 +1224,12 @@ export function AdminDashboard({
                   />
                 </div>
 
+                <label htmlFor={`${fieldId}-product-category-filter`} className="sr-only">
+                  Lọc danh mục sản phẩm trong quản trị
+                </label>
                 <select
+                  id={`${fieldId}-product-category-filter`}
+                  name="productCategory"
                   value={productCategoryFilter}
                   onChange={(e) => setProductCategoryFilter(e.target.value)}
                   aria-label="Lọc danh mục sản phẩm trong quản trị"
@@ -1019,9 +1371,15 @@ export function AdminDashboard({
             <div className="space-y-5">
               <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl p-4 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
                 <div className="relative flex-1 max-w-md">
+                  <label htmlFor={`${fieldId}-order-search`} className="sr-only">
+                    Tìm đơn hàng trong quản trị
+                  </label>
                   <Search className="w-4 h-4 text-[#867363] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
+                    id={`${fieldId}-order-search`}
+                    name="orderSearch"
                     type="text"
+                    autoComplete="off"
                     value={orderQuery}
                     onChange={(e) => setOrderQuery(e.target.value)}
                     placeholder="Tìm theo mã đơn, tên khách hàng, số điện thoại..."
@@ -1044,6 +1402,26 @@ export function AdminDashboard({
                       {status}
                     </button>
                   ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-xs text-[#867363]">
+                    Từ
+                    <input
+                      type="date"
+                      value={orderDateFrom}
+                      onChange={(event) => setOrderDateFrom(event.target.value)}
+                      className="ml-1.5 rounded-lg border border-[#E2D7C6] bg-white px-2 py-1.5 text-xs"
+                    />
+                  </label>
+                  <label className="text-xs text-[#867363]">
+                    Đến
+                    <input
+                      type="date"
+                      value={orderDateTo}
+                      onChange={(event) => setOrderDateTo(event.target.value)}
+                      className="ml-1.5 rounded-lg border border-[#E2D7C6] bg-white px-2 py-1.5 text-xs"
+                    />
+                  </label>
                 </div>
               </div>
 
@@ -1077,7 +1455,7 @@ export function AdminDashboard({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#EFE8DD] text-sm">
-                        {filteredOrders.map((order) => (
+                        {pagedOrders.map((order) => (
                           <tr
                             key={order.orderNumber}
                             className="hover:bg-[#F8F4EE]/70 transition-colors"
@@ -1107,12 +1485,27 @@ export function AdminDashboard({
                                 {order.paymentMethod === 'cod' && 'COD'}
                               </p>
                               <p className="text-[#5E4B3C] mt-0.5">
-                                {order.paymentStatus}
+                                {order.orderStatus === 'Chờ duyệt giá và tồn kho'
+                                  ? order.paymentStatus === 'awaiting_confirmation'
+                                    ? 'Khách báo đã chuyển khoản'
+                                    : 'Chờ xác minh đơn'
+                                  : order.paymentStatus === 'awaiting_confirmation'
+                                    ? 'Khách báo đã chuyển khoản'
+                                    : order.paymentStatus}
                               </p>
                             </td>
                             <td className="py-3.5 px-4">
+                              <label htmlFor={`${fieldId}-order-status-${order.orderNumber}`} className="sr-only">
+                                Cập nhật trạng thái đơn {order.orderNumber}
+                              </label>
                               <select
+                                id={`${fieldId}-order-status-${order.orderNumber}`}
+                                name={`orderStatus-${order.orderNumber}`}
                                 value={order.orderStatus}
+                                disabled={
+                                  order.orderStatus ===
+                                  'Chờ duyệt giá và tồn kho'
+                                }
                                 onChange={(e) =>
                                   void handleOrderStatusChange(
                                     order.orderNumber,
@@ -1130,7 +1523,9 @@ export function AdminDashboard({
                               </select>
                             </td>
                             <td className="py-3.5 px-4 text-right font-semibold text-[#073D63] tabular-nums whitespace-nowrap">
-                              {formatVND(order.total)}
+                              {order.orderStatus === 'Chờ duyệt giá và tồn kho'
+                                ? `Tạm tính ${formatVND(order.quotedTotal ?? 0)}`
+                                : formatVND(order.total)}
                             </td>
                             <td className="py-3.5 px-6 text-right whitespace-nowrap">
                               <button
@@ -1149,6 +1544,42 @@ export function AdminDashboard({
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'customers' && (
+            <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl overflow-hidden">
+              {customers.length === 0 ? (
+                <div className="p-12 text-center text-sm text-[#5E4B3C]">
+                  Chưa có khách hàng trong đơn hàng.
+                </div>
+              ) : (
+                <div className="divide-y divide-[#EFE8DD]">
+                  {customers.map((customer) => (
+                    <div
+                      key={customer.key}
+                      className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <p className="font-medium text-[#2B2018]">
+                          {customer.name}
+                        </p>
+                        <p className="text-xs text-[#867363]">
+                          {customer.phone} · {customer.email}
+                        </p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <p className="text-sm font-semibold text-[#073D63] tabular-nums">
+                          {formatVND(customer.total)}
+                        </p>
+                        <p className="text-xs text-[#867363]">
+                          {customer.orders} đơn hàng
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -1266,7 +1697,12 @@ export function AdminDashboard({
                       {uploadingImages ? 'Đang xử lý ảnh nét...' : 'Chọn ảnh từ máy tính'}
                     </span>
                   </button>
+                  <label htmlFor={`${fieldId}-product-images`} className="sr-only">
+                    Chọn ảnh sản phẩm từ máy tính
+                  </label>
                   <input
+                    id={`${fieldId}-product-images`}
+                    name="productImages"
                     ref={fileInputRef}
                     type="file"
                     accept="image/*"
@@ -1350,8 +1786,12 @@ export function AdminDashboard({
 
                   {/* Studio Preset Quick Picker */}
                   <div className="mt-3 pt-3 border-t border-[#E2D7C6] flex flex-wrap items-center gap-2 text-xs">
-                    <span className="text-[#867363]">Hoặc thêm nhanh ảnh studio:</span>
+                    <label htmlFor={`${fieldId}-studio-image`} className="text-[#867363]">
+                      Hoặc thêm nhanh ảnh studio:
+                    </label>
                     <select
+                      id={`${fieldId}-studio-image`}
+                      name="studioImage"
                       value=""
                       onChange={(e) => {
                         const url = e.target.value;
@@ -1385,10 +1825,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="sm:col-span-2">
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-name`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Tên sản phẩm *
                     </label>
                     <input
+                      id={`${fieldId}-product-name`}
+                      name="productName"
                       type="text"
                       value={productForm.name}
                       onChange={(e) =>
@@ -1399,10 +1841,12 @@ export function AdminDashboard({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-sku`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Mã SKU
                     </label>
                     <input
+                      id={`${fieldId}-product-sku`}
+                      name="productSku"
                       type="text"
                       value={productForm.sku}
                       onChange={(e) =>
@@ -1415,10 +1859,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-category`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Danh mục
                     </label>
                     <select
+                      id={`${fieldId}-product-category`}
+                      name="productCategory"
                       value={productForm.category}
                       onChange={(e) =>
                         setProductForm((f) => ({
@@ -1437,10 +1883,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-village`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Nơi sản xuất
                     </label>
                     <select
+                      id={`${fieldId}-product-village`}
+                      name="productVillage"
                       value={productForm.village}
                       onChange={(e) =>
                         setProductForm((f) => ({ ...f, village: e.target.value }))
@@ -1458,10 +1906,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-material`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Chất liệu 
                     </label>
                     <select
+                      id={`${fieldId}-product-material`}
+                      name="productMaterial"
                       value={productForm.material}
                       onChange={(e) =>
                         setProductForm((f) => ({ ...f, material: e.target.value }))
@@ -1481,10 +1931,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-price`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Giá bán (VNĐ) *
                     </label>
                     <input
+                      id={`${fieldId}-product-price`}
+                      name="productPrice"
                       type="number"
                       min={10000}
                       step={10000}
@@ -1500,10 +1952,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-original-price`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Giá gốc trước giảm (tuỳ chọn)
                     </label>
                     <input
+                      id={`${fieldId}-product-original-price`}
+                      name="productOriginalPrice"
                       type="number"
                       min={0}
                       step={10000}
@@ -1520,10 +1974,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-craft-days`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Số ngày chế tác
                     </label>
                     <input
+                      id={`${fieldId}-product-craft-days`}
+                      name="productCraftDays"
                       type="number"
                       min={1}
                       value={productForm.craftDays}
@@ -1538,10 +1994,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-availability`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Nhãn tình trạng
                     </label>
                     <select
+                      id={`${fieldId}-product-availability`}
+                      name="productAvailability"
                       value={productForm.availabilityTag}
                       onChange={(e) =>
                         setProductForm((f) => ({
@@ -1561,10 +2019,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-dimensions`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Kích thước (Dài × Rộng × Cao)
                     </label>
                     <input
+                      id={`${fieldId}-product-dimensions`}
+                      name="productDimensions"
                       type="text"
                       value={productForm.dimensions}
                       onChange={(e) =>
@@ -1574,10 +2034,12 @@ export function AdminDashboard({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-weight`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Khối lượng / Quy cách đóng gói
                     </label>
                     <input
+                      id={`${fieldId}-product-weight`}
+                      name="productWeight"
                       type="text"
                       value={productForm.weight}
                       onChange={(e) =>
@@ -1588,10 +2050,12 @@ export function AdminDashboard({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-artisan`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Nghệ nhân / Xưởng chế tác
                     </label>
                     <input
+                      id={`${fieldId}-product-artisan`}
+                      name="productArtisan"
                       type="text"
                       value={productForm.artisanName}
                       onChange={(e) =>
@@ -1603,6 +2067,102 @@ export function AdminDashboard({
                       className="w-full px-3 py-2 rounded-lg bg-[#F8F4EE] border border-[#E2D7C6] text-sm text-[#2B2018]"
                     />
                   </div>
+                </div>
+
+                <div className="mt-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-[#5E4B3C]">
+                      Thông số kỹ thuật
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setProductForm((form) => ({
+                          ...form,
+                          specifications: [
+                            ...form.specifications,
+                            { label: '', value: '' },
+                          ],
+                        }))
+                      }
+                      className="inline-flex items-center gap-1 rounded-lg bg-[#EFE8DD] px-3 py-1.5 text-xs font-semibold text-[#2B2018] hover:bg-[#E2D7C6]"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Thêm thông số
+                    </button>
+                  </div>
+                  {productForm.specifications.map((specification, index) => (
+                    <div
+                      key={`${fieldId}-product-spec-${index}`}
+                      className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2"
+                    >
+                      <div>
+                        <label
+                          htmlFor={`${fieldId}-product-spec-label-${index}`}
+                          className="mb-1 block text-xs font-medium text-[#5E4B3C]"
+                        >
+                          Tên thông số
+                        </label>
+                        <input
+                          id={`${fieldId}-product-spec-label-${index}`}
+                          name={`productSpecificationLabel${index}`}
+                          type="text"
+                          value={specification.label}
+                          onChange={(event) =>
+                            setProductForm((form) => ({
+                              ...form,
+                              specifications: form.specifications.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, label: event.target.value }
+                                  : item
+                              ),
+                            }))
+                          }
+                          className="w-full rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] px-3 py-2 text-sm text-[#2B2018]"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor={`${fieldId}-product-spec-value-${index}`}
+                          className="mb-1 block text-xs font-medium text-[#5E4B3C]"
+                        >
+                          Giá trị
+                        </label>
+                        <input
+                          id={`${fieldId}-product-spec-value-${index}`}
+                          name={`productSpecificationValue${index}`}
+                          type="text"
+                          value={specification.value}
+                          onChange={(event) =>
+                            setProductForm((form) => ({
+                              ...form,
+                              specifications: form.specifications.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, value: event.target.value }
+                                  : item
+                              ),
+                            }))
+                          }
+                          className="w-full rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] px-3 py-2 text-sm text-[#2B2018]"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setProductForm((form) => ({
+                            ...form,
+                            specifications: form.specifications.filter(
+                              (_, itemIndex) => itemIndex !== index
+                            ),
+                          }))
+                        }
+                        aria-label={`Xóa thông số ${index + 1}`}
+                        className="mb-0.5 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#E2D7C6] text-[#5E4B3C] hover:bg-[#EFE8DD]"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -1635,10 +2195,12 @@ export function AdminDashboard({
                       className="p-3 rounded-lg bg-[#F8F4EE] border border-[#E2D7C6] grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center"
                     >
                       <div className="sm:col-span-5">
-                        <label className="block text-[11px] text-[#867363] mb-0.5">
+                        <label htmlFor={`${fieldId}-variant-${idx}-label`} className="block text-[11px] text-[#867363] mb-0.5">
                           Tên phiên bản
                         </label>
                         <input
+                          id={`${fieldId}-variant-${idx}-label`}
+                          name={`variants.${idx}.label`}
                           type="text"
                           value={variant.label}
                           onChange={(e) =>
@@ -1649,11 +2211,13 @@ export function AdminDashboard({
                       </div>
 
                       <div className="sm:col-span-2">
-                        <label className="block text-[11px] text-[#867363] mb-0.5">
+                        <label htmlFor={`${fieldId}-variant-${idx}-color`} className="block text-[11px] text-[#867363] mb-0.5">
                           Màu mẫu
                         </label>
                         <div className="flex items-center gap-2">
                           <input
+                            id={`${fieldId}-variant-${idx}-color`}
+                            name={`variants.${idx}.color`}
                             type="color"
                             value={variant.colorHex}
                             onChange={(e) =>
@@ -1670,10 +2234,12 @@ export function AdminDashboard({
                       </div>
 
                       <div className="sm:col-span-2">
-                        <label className="block text-[11px] text-[#867363] mb-0.5">
+                        <label htmlFor={`${fieldId}-variant-${idx}-price-delta`} className="block text-[11px] text-[#867363] mb-0.5">
                           Cộng thêm (₫)
                         </label>
                         <input
+                          id={`${fieldId}-variant-${idx}-price-delta`}
+                          name={`variants.${idx}.priceDelta`}
                           type="number"
                           step={10000}
                           value={variant.priceDelta}
@@ -1687,10 +2253,12 @@ export function AdminDashboard({
                       </div>
 
                       <div className="sm:col-span-2">
-                        <label className="block text-[11px] text-[#867363] mb-0.5">
+                        <label htmlFor={`${fieldId}-variant-${idx}-stock`} className="block text-[11px] text-[#867363] mb-0.5">
                           Tồn kho
                         </label>
                         <input
+                          id={`${fieldId}-variant-${idx}-stock`}
+                          name={`variants.${idx}.stock`}
                           type="number"
                           min={0}
                           value={variant.stock}
@@ -1726,10 +2294,12 @@ export function AdminDashboard({
                 </h3>
 
                 <div>
-                  <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                  <label htmlFor={`${fieldId}-product-short-description`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                     Mô tả ngắn ngoài thẻ sản phẩm
                   </label>
                   <textarea
+                    id={`${fieldId}-product-short-description`}
+                    name="productShortDescription"
                     rows={2}
                     value={productForm.shortDesc}
                     onChange={(e) =>
@@ -1741,10 +2311,12 @@ export function AdminDashboard({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                  <label htmlFor={`${fieldId}-product-story`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                     Câu chuyện chế tác chi tiết (hiển thị khi bấm xem sản phẩm)
                   </label>
                   <textarea
+                    id={`${fieldId}-product-story`}
+                    name="productStory"
                     rows={3}
                     value={productForm.story}
                     onChange={(e) =>
@@ -1757,10 +2329,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-care-guide`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Hướng dẫn bảo quản
                     </label>
                     <input
+                      id={`${fieldId}-product-care-guide`}
+                      name="productCareGuide"
                       type="text"
                       value={productForm.careGuide}
                       onChange={(e) =>
@@ -1770,10 +2344,12 @@ export function AdminDashboard({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-keywords`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Từ khóa tìm kiếm thông minh (cách nhau dấu phẩy)
                     </label>
                     <input
+                      id={`${fieldId}-product-keywords`}
+                      name="productKeywords"
                       type="text"
                       value={productForm.keywordsText}
                       onChange={(e) =>
@@ -1787,8 +2363,10 @@ export function AdminDashboard({
                   </div>
                 </div>
 
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-[#2B2018] cursor-pointer pt-1">
+                <label htmlFor={`${fieldId}-product-is-new`} className="inline-flex items-center gap-2 text-xs font-medium text-[#2B2018] cursor-pointer pt-1">
                   <input
+                    id={`${fieldId}-product-is-new`}
+                    name="productIsNew"
                     type="checkbox"
                     checked={productForm.isNew}
                     onChange={(e) =>
@@ -1842,21 +2420,47 @@ export function AdminDashboard({
                   Đặt lúc {formatOrderDate(inspectingOrder.createdAt)}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setInspectingOrder(null)}
-                aria-label="Đóng chi tiết đơn hàng"
-                className="w-8 h-8 rounded-lg border border-[#E2D7C6] flex items-center justify-center text-[#2B2018] hover:bg-[#EFE8DD] cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="rounded-lg border border-[#E2D7C6] px-3 py-1.5 text-xs font-medium text-[#2B2018]"
+                >
+                  In đơn
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInspectingOrder(null)}
+                  aria-label="Đóng chi tiết đơn hàng"
+                  className="w-8 h-8 rounded-lg border border-[#E2D7C6] flex items-center justify-center text-[#2B2018] hover:bg-[#EFE8DD] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <div className="p-6 space-y-4 text-sm">
-              <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#3F5E3B]">
-                <CheckCircle2 className="w-4 h-4" />
+              <div
+                className={`inline-flex items-center gap-1.5 text-xs font-medium ${
+                  inspectingOrder.paymentStatus === 'paid'
+                    ? 'text-[#3F5E3B]'
+                    : 'text-[#073D63]'
+                }`}
+              >
+                {inspectingOrder.paymentStatus === 'paid' ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  <Package className="w-4 h-4" />
+                )}
                 <span>
-                  {inspectingOrder.paymentStatus} · {inspectingOrder.orderStatus}
+                  {inspectingOrder.orderStatus === 'Chờ duyệt giá và tồn kho'
+                    ? inspectingOrder.paymentStatus === 'awaiting_confirmation'
+                      ? 'Khách báo đã chuyển khoản'
+                      : 'Chờ xác minh đơn'
+                    : inspectingOrder.paymentStatus === 'awaiting_confirmation'
+                      ? 'Khách báo đã chuyển khoản'
+                      : inspectingOrder.paymentStatus}{' '}
+                  · {inspectingOrder.orderStatus}
                 </span>
               </div>
               {orderActionError && (
@@ -1864,20 +2468,83 @@ export function AdminDashboard({
                   {orderActionError}
                 </p>
               )}
-              {inspectingOrder.paymentMethod === 'vietqr' &&
-                inspectingOrder.paymentStatus === 'Chờ xác nhận thanh toán' && (
+              {inspectingOrder.orderStatus === 'Chờ duyệt giá và tồn kho' && (
+                <div className="space-y-2 rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] p-4">
+                  <p className="text-xs leading-relaxed text-[#5E4B3C]">
+                    Giá QR khách đã thấy là giá tham khảo. Bấm duyệt để lấy giá, phân
+                    loại và tồn kho từ danh mục Firestore; hãy đối chiếu đúng số tiền
+                    vào tài khoản ngân hàng trước khi xác nhận thanh toán thành công.
+                  </p>
                   <button
                     type="button"
-                    disabled={paymentConfirming}
+                    disabled={approvingOrder}
                     onClick={() =>
-                      void handleConfirmOrderPayment(inspectingOrder.orderNumber)
+                      void handleApproveOrder(inspectingOrder.orderNumber)
                     }
                     className="w-full rounded-lg bg-[#073D63] px-4 py-2.5 text-sm font-medium text-[#FCF9F5] disabled:opacity-60"
                   >
-                    {paymentConfirming
-                      ? 'Đang cập nhật...'
-                      : 'Xác nhận đã nhận chuyển khoản'}
+                    {approvingOrder
+                      ? 'Đang xác minh catalog...'
+                      : 'Xác nhận giá và tồn kho'}
                   </button>
+                </div>
+              )}
+              {inspectingOrder.paymentMethod === 'vietqr' &&
+                inspectingOrder.paymentStatus === 'awaiting_confirmation' &&
+                inspectingOrder.orderStatus !== 'Chờ duyệt giá và tồn kho' && (
+                  <div className="space-y-2">
+                    {inspectingOrder.quotedTotal !== undefined &&
+                      inspectingOrder.quotedTotal !== inspectingOrder.total && (
+                        <p className="rounded-lg bg-[#FFF2D8] px-3.5 py-2.5 text-xs leading-relaxed text-[#6D4A12]">
+                          Khách đã thấy QR tạm tính{' '}
+                          {formatVND(inspectingOrder.quotedTotal)}; tổng theo
+                          catalog hiện tại là {formatVND(inspectingOrder.total)}.
+                          Chỉ xác nhận khi số tiền thực nhận trong ngân hàng khớp.
+                        </p>
+                      )}
+                    <button
+                      type="button"
+                      disabled={paymentConfirming}
+                      onClick={() =>
+                        void handleConfirmOrderPayment(
+                          inspectingOrder.orderNumber,
+                          true
+                        )
+                      }
+                      className="w-full rounded-lg bg-[#073D63] px-4 py-2.5 text-sm font-medium text-[#FCF9F5] disabled:opacity-60"
+                    >
+                      {paymentConfirming
+                        ? 'Đang cập nhật...'
+                        : 'Đã nhận tiền'}
+                    </button>
+                    <label className="block text-xs font-medium text-[#5E4B3C]">
+                      Ghi chú khi chưa nhận được tiền
+                      <textarea
+                        value={paymentRejectionNote}
+                        onChange={(event) =>
+                          setPaymentRejectionNote(event.target.value)
+                        }
+                        maxLength={500}
+                        rows={2}
+                        className="mt-1 w-full rounded-lg border border-[#E2D7C6] bg-white px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={
+                        paymentConfirming || paymentRejectionNote.trim().length === 0
+                      }
+                      onClick={() =>
+                        void handleConfirmOrderPayment(
+                          inspectingOrder.orderNumber,
+                          false
+                        )
+                      }
+                      className="w-full rounded-lg border border-[#9E3B2B] px-4 py-2.5 text-sm font-medium text-[#9E3B2B] disabled:opacity-50"
+                    >
+                      Chưa nhận được tiền
+                    </button>
+                  </div>
                 )}
 
               <div className="p-4 rounded-lg bg-[#F8F4EE] border border-[#E2D7C6] space-y-1 text-xs text-[#5E4B3C]">
@@ -1902,7 +2569,7 @@ export function AdminDashboard({
                   )}
                 <p>
                   <strong className="text-[#2B2018]">Địa chỉ:</strong>{' '}
-                  {inspectingOrder.address}, {inspectingOrder.city}
+                  {formatAddressWithCity(inspectingOrder.address, inspectingOrder.city)}
                 </p>
                 <p>
                   <strong className="text-[#2B2018]">Dự kiến giao:</strong>{' '}
@@ -1911,28 +2578,82 @@ export function AdminDashboard({
               </div>
 
               <div className="divide-y divide-[#EFE8DD] border border-[#E2D7C6] rounded-lg px-4">
-                {inspectingOrder.items.map((item, idx) => (
-                  <div
-                    key={`${item.productId}-${idx}`}
-                    className="py-2.5 flex items-center justify-between gap-3 text-xs"
-                  >
-                    <div>
-                      <p className="font-medium text-[#2B2018]">
-                        {item.name} × {item.quantity}
-                      </p>
-                      <p className="text-[#867363]">{item.variantLabel}</p>
+                {inspectingOrder.items.map((item, idx) => {
+                  const catalogProduct = products.find(
+                    (product) => product.id === item.productId
+                  );
+                  const catalogVariant = catalogProduct?.variants.find(
+                    (variant) => variant.id === item.variantId
+                  );
+                  const awaitingPriceApproval =
+                    inspectingOrder.orderStatus ===
+                    'Chờ duyệt giá và tồn kho';
+                  return (
+                    <div
+                      key={`${item.productId}-${idx}`}
+                      className="py-2.5 flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div>
+                        <p className="font-medium text-[#2B2018]">
+                          {awaitingPriceApproval
+                            ? catalogProduct?.name ?? `Sản phẩm ${item.productId}`
+                            : item.name}{' '}
+                          × {item.quantity}
+                        </p>
+                        <p className="text-[#867363]">
+                          {awaitingPriceApproval
+                            ? catalogVariant?.label ?? `Phân loại ${item.variantId}`
+                            : item.variantLabel}
+                        </p>
+                      </div>
+                      <span className="font-semibold text-[#2B2018] tabular-nums">
+                        {awaitingPriceApproval
+                          ? 'Chưa xác nhận giá'
+                          : formatVND(item.unitPrice * item.quantity)}
+                      </span>
                     </div>
-                    <span className="font-semibold text-[#2B2018] tabular-nums">
-                      {formatVND(item.unitPrice * item.quantity)}
+                  );
+                })}
+                {inspectingOrder.orderStatus === 'Chờ duyệt giá và tồn kho' ? (
+                  <p className="py-3 text-xs text-[#867363]">
+                    Tổng tiền sẽ được tính từ danh mục khi admin duyệt đơn.
+                  </p>
+                ) : (
+                  <div className="py-3 space-y-1.5 text-xs text-[#5E4B3C]">
+                  <div className="flex justify-between">
+                    <span>Tiền hàng</span>
+                    <span className="tabular-nums">
+                      {formatVND(
+                        inspectingOrder.subtotal ??
+                          inspectingOrder.items.reduce(
+                            (sum, item) => sum + item.unitPrice * item.quantity,
+                            0
+                          )
+                      )}
                     </span>
                   </div>
-                ))}
-                <div className="py-3 flex justify-between font-semibold text-[#2B2018]">
-                  <span>Tổng thanh toán</span>
-                  <span className="text-[#073D63] tabular-nums">
-                    {formatVND(inspectingOrder.total)}
-                  </span>
-                </div>
+                  {(inspectingOrder.discount ?? 0) > 0 && (
+                    <div className="flex justify-between">
+                      <span>Giảm giá</span>
+                      <span className="tabular-nums">
+                        -{formatVND(inspectingOrder.discount ?? 0)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span>Phí vận chuyển</span>
+                    <span className="tabular-nums">
+                      {formatVND(inspectingOrder.shippingFee ?? 35000)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-t border-[#EFE8DD] pt-2 font-semibold text-[#2B2018]">
+                    <span>Tổng thanh toán</span>
+                    <span className="text-[#073D63] tabular-nums">
+                      {formatVND(inspectingOrder.total)}
+                    </span>
+                  </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

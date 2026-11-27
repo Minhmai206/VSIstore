@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { MessageCircle, Phone, X } from 'lucide-react';
+import { SITE_CONFIG } from '../config/site';
 
 const PHONE_DISPLAY = '094 816 07 16';
 const PHONE_RAW = '0948160716';
@@ -36,8 +37,8 @@ export function FloatingWidgets() {
           href={FACEBOOK_URL}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Facebook VSI"
-          title="Facebook VSI"
+          aria-label={`Facebook ${SITE_CONFIG.brandName}`}
+          title={`Facebook ${SITE_CONFIG.brandName}`}
           className="group relative w-10 h-10 rounded-xl bg-[#FCF9F5]/95 backdrop-blur-xs border border-[#E2D7C6] hover:border-[#073D63] text-[#073D63] shadow-sm flex items-center justify-center transition-colors"
         >
           <svg
@@ -48,7 +49,7 @@ export function FloatingWidgets() {
             <path d="M13.5 22v-8h2.7l.4-3h-3.1V9.1c0-.9.3-1.5 1.6-1.5h1.6V4.9c-.3 0-1.3-.1-2.4-.1-2.4 0-4 1.4-4 4.1V11H7.7v3h2.6v8h3.2z" />
           </svg>
           <span className="pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity absolute right-full mr-2.5 px-2.5 py-1 rounded-md bg-[#2B2018] text-[#FCF9F5] text-xs font-medium whitespace-nowrap shadow-sm">
-            Facebook VSI
+            Facebook {SITE_CONFIG.brandName}
           </span>
         </a>
 

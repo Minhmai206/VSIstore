@@ -3,12 +3,21 @@ import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
 import {defineConfig} from 'vite';
+import {SITE_CONFIG} from './src/config/site.ts';
 
 export default defineConfig(() => {
   return {
     plugins: [
       react(),
       tailwindcss(),
+      {
+        name: 'site-metadata',
+        transformIndexHtml(html) {
+          return html
+            .replace(/__SITE_TITLE__/g, SITE_CONFIG.metadata.title)
+            .replace(/__SITE_DESCRIPTION__/g, SITE_CONFIG.metadata.description);
+        },
+      },
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds. Do not remove.

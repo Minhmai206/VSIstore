@@ -1,4 +1,12 @@
-import { MouseEvent, RefObject, useMemo, useRef, useState } from 'react';
+import {
+  MouseEvent,
+  RefObject,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Check,
   Search,
@@ -10,6 +18,7 @@ import {
 import {
   QUICK_SEARCH_TERMS,
 } from '../data/products';
+import { SITE_CONFIG } from '../config/site';
 import {
   CraftCategory,
   FilterState,
@@ -18,6 +27,8 @@ import {
 } from '../types/shop';
 import { formatVND, scoreProductSearch } from '../utils/format';
 import { ResilientImage } from './ResilientImage';
+
+const PRODUCTS_PAGE_SIZE = 9;
 
 interface SmartCatalogProps {
   products: Product[];
@@ -44,9 +55,12 @@ export function SmartCatalog({
   onQuickAdd,
   searchInputRef,
 }: SmartCatalogProps) {
+  const fieldId = useId().replace(/:/g, '');
   const [searchFocused, setSearchFocused] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [addedId, setAddedId] = useState<string | null>(null);
+  const [visibleProductCount, setVisibleProductCount] =
+    useState(PRODUCTS_PAGE_SIZE);
   const dropdownBlurTimer = useRef<number | null>(null);
 
   const categoryCounts = useMemo(() => {
@@ -144,6 +158,15 @@ export function SmartCatalog({
     return scored.map((entry) => entry.product);
   }, [filters, products]);
 
+  const visibleProducts = useMemo(
+    () => filteredProducts.slice(0, visibleProductCount),
+    [filteredProducts, visibleProductCount]
+  );
+
+  useEffect(() => {
+    setVisibleProductCount(PRODUCTS_PAGE_SIZE);
+  }, [filters]);
+
   const activeFilterCount = useMemo(() => {
     let count = 0;
     if (filters.query.trim()) count += 1;
@@ -182,18 +205,20 @@ export function SmartCatalog({
             </h2>
           </div>
           <p className="text-sm text-[#5E4B3C] tabular-nums">
-            {productsLoading
+            {productsLoading && products.length === 0
               ? 'Đang tải sản phẩm...'
-              : productsLoadError
-                ? 'Không tải được sản phẩm'
-                : `Hiển thị ${filteredProducts.length} / ${products.length} sản phẩm`}
+              : productsLoading
+                ? 'Đang cập nhật danh sách đã lưu...'
+                : productsLoadError && products.length === 0
+                  ? 'Không tải được sản phẩm'
+                  : `Hiển thị ${Math.min(visibleProductCount, filteredProducts.length)} / ${filteredProducts.length} sản phẩm`}
           </p>
         </div>
 
         <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="space-y-4 lg:sticky lg:top-24">
             <div className="rounded-xl border border-[#E2D7C6] bg-[#FCF9F5] p-4">
-              <label className="mb-2 block text-sm font-semibold text-[#2B2018]" htmlFor="catalog-search">
+              <label className="mb-2 block text-sm font-semibold text-[#2B2018]" htmlFor={`${fieldId}-catalog-search`}>
                 Tìm kiếm sản phẩm
               </label>
               <div className="relative">
@@ -202,9 +227,11 @@ export function SmartCatalog({
                 strokeWidth={1.75}
               />
               <input
-                id="catalog-search"
+                id={`${fieldId}-catalog-search`}
+                name="q"
                 ref={searchInputRef}
                 type="text"
+                autoComplete="off"
                 value={filters.query}
                 onChange={(e) => onUpdateFilters({ query: e.target.value })}
                 onFocus={() => {
@@ -218,7 +245,7 @@ export function SmartCatalog({
                     setSearchFocused(false);
                   }, 180);
                 }}
-                placeholder="Tên, chất liệu..."
+                placeholder={SITE_CONFIG.searchPlaceholder || undefined}
                 aria-label="Tìm kiếm sản phẩm"
                 className="w-full rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] py-2.5 pl-10 pr-10 text-sm text-[#2B2018] placeholder:text-[#867363] transition-colors focus:border-[#073D63] focus:outline-none"
               />
@@ -311,13 +338,14 @@ export function SmartCatalog({
             </div>
 
             <div className="rounded-xl border border-[#E2D7C6] bg-[#FCF9F5] p-4">
-              <label className="mb-2 block text-sm font-semibold text-[#2B2018]" htmlFor="catalog-sort">
+              <label className="mb-2 block text-sm font-semibold text-[#2B2018]" htmlFor={`${fieldId}-catalog-sort`}>
                 Sắp xếp
               </label>
               <div className="relative">
                 <ArrowUpDown className="w-4 h-4 text-[#867363] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <select
-                  id="catalog-sort"
+                  id={`${fieldId}-catalog-sort`}
+                  name="sort"
                   value={filters.sortBy}
                   onChange={(e) =>
                     onUpdateFilters({ sortBy: e.target.value as SortOption })
@@ -351,8 +379,9 @@ export function SmartCatalog({
               </button>
               {showAdvanced && (
                 <div className="space-y-4 border-t border-[#EFE8DD] p-4">
-                  {(['Công cụ máy móc', 'Bộ kit'] as CraftCategory[]).map((category) => (
+                  {(['Công cụ máy móc', 'Bộ kit'] as CraftCategory[]).map((category, index) => (
                     <label
+                      htmlFor={`${fieldId}-category-${index}`}
                       key={category}
                       className="flex cursor-pointer items-center justify-between gap-3 text-sm text-[#5E4B3C]"
                     >
@@ -362,6 +391,8 @@ export function SmartCatalog({
                           {categoryCounts[category] || 0}
                         </span>
                         <input
+                          id={`${fieldId}-category-${index}`}
+                          name="category"
                           type="checkbox"
                           checked={filters.category === category}
                           onChange={(event) =>
@@ -390,17 +421,30 @@ export function SmartCatalog({
           </aside>
 
           <div className="min-w-0">
-            {productsLoading ? (
+            {productsLoading && products.length === 0 ? (
               <div
-                className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-[#E2D7C6] bg-[#FCF9F5] p-8 text-center"
+                className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3"
                 role="status"
+                aria-label="Đang tải sản phẩm"
               >
-                <span className="mb-3 h-8 w-8 animate-spin rounded-full border-2 border-[#D7C9B4] border-t-[#073D63]" />
-                <p className="text-sm text-[#5E4B3C]">
-                  Đang tải sản phẩm từ Firebase...
-                </p>
+                {Array.from({ length: 6 }, (_, index) => (
+                  <div
+                    key={index}
+                    aria-hidden="true"
+                    className="overflow-hidden rounded-xl border border-[#E2D7C6] bg-[#FCF9F5]"
+                  >
+                    <div className="aspect-[4/3] animate-pulse bg-[#EFE8DD]" />
+                    <div className="space-y-3 p-6">
+                      <div className="h-3 w-2/5 animate-pulse rounded bg-[#EFE8DD]" />
+                      <div className="h-6 w-4/5 animate-pulse rounded bg-[#EFE8DD]" />
+                      <div className="h-4 w-full animate-pulse rounded bg-[#EFE8DD]" />
+                      <div className="h-4 w-3/4 animate-pulse rounded bg-[#EFE8DD]" />
+                      <div className="mt-5 h-10 animate-pulse rounded bg-[#EFE8DD]" />
+                    </div>
+                  </div>
+                ))}
               </div>
-            ) : productsLoadError ? (
+            ) : productsLoadError && products.length === 0 ? (
               <div
                 className="space-y-4 rounded-xl border border-[#E2D7C6] bg-[#FCF9F5] p-8 text-center"
                 role="alert"
@@ -426,7 +470,26 @@ export function SmartCatalog({
                   Sản phẩm sẽ hiển thị tại đây sau khi được thêm vào cửa hàng trên Firebase.
                 </p>
               </div>
-            ) : filteredProducts.length === 0 ? (
+            ) : (
+          <>
+            {productsLoadError && products.length > 0 && (
+              <div
+                className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#E2D7C6] bg-[#FCF9F5] px-4 py-3 text-sm text-[#5E4B3C]"
+                role="status"
+              >
+                <span>
+                  Đang hiển thị danh sách đã lưu; chưa thể tải bản cập nhật mới nhất.
+                </span>
+                <button
+                  type="button"
+                  onClick={onRetryProducts}
+                  className="font-semibold text-[#073D63] underline underline-offset-2"
+                >
+                  Thử tải lại
+                </button>
+              </div>
+            )}
+            {filteredProducts.length === 0 ? (
           <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl p-12 text-center space-y-4">
             <p className="font-serif text-2xl font-semibold text-[#2B2018]">
               Không tìm thấy sản phẩm phù hợp
@@ -442,9 +505,9 @@ export function SmartCatalog({
               Xóa bộ lọc &amp; xem tất cả
             </button>
           </div>
-        ) : (
+                ) : (
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
-            {filteredProducts.map((product) => {
+            {visibleProducts.map((product) => {
               const isJustAdded = addedId === product.id;
               return (
                 <article
@@ -554,7 +617,24 @@ export function SmartCatalog({
               );
             })}
           </div>
-        )}
+                )}
+                {filteredProducts.length > visibleProductCount && (
+                  <div className="mt-8 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVisibleProductCount((count) =>
+                          Math.min(count + PRODUCTS_PAGE_SIZE, filteredProducts.length)
+                        )
+                      }
+                      className="rounded-lg border border-[#073D63] px-5 py-2.5 text-sm font-medium text-[#073D63] transition-colors hover:bg-[#073D63] hover:text-[#FCF9F5]"
+                    >
+                      Xem thêm {filteredProducts.length - visibleProductCount} sản phẩm
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       </div>

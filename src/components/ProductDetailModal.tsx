@@ -65,6 +65,23 @@ export function ProductDetailModal({
     product.variants.find((v) => v.id === selectedVariantId) ??
     product.variants[0];
   const unitPrice = product.price + (activeVariant?.priceDelta ?? 0);
+  const specifications = (product.specifications ?? []).filter(
+    ({ label, value }) => label.trim() && value.trim()
+  );
+  const displaySpecifications =
+    specifications.length > 0
+      ? specifications
+      : [
+          ...(product.dimensions.trim()
+            ? [{ label: 'Kích thước', value: product.dimensions }]
+            : []),
+          ...(product.weight?.trim()
+            ? [{ label: 'Khối lượng', value: product.weight }]
+            : []),
+          ...(product.artisanName.trim()
+            ? [{ label: 'Nghệ nhân / Xưởng', value: product.artisanName }]
+            : []),
+        ];
 
   const handleAdd = () => {
     if (!activeVariant) return;
@@ -160,26 +177,19 @@ export function ProductDetailModal({
                   {product.sku}
                 </span>
               </div>
-              <div className="flex justify-between gap-4 py-2 border-b border-[#E2D7C6]">
-                <span className="text-[#867363]">Kích thước</span>
-                <span className="font-medium text-[#2B2018] text-right tabular-nums">
-                  {product.dimensions}
-                </span>
-              </div>
-              {product.weight && (
-                <div className="flex justify-between gap-4 py-2 border-b border-[#E2D7C6]">
-                  <span className="text-[#867363]">Khối lượng</span>
-                  <span className="font-medium text-[#2B2018] text-right tabular-nums">
-                    {product.weight}
+              {displaySpecifications.map((specification, index) => (
+                <div
+                  key={`${specification.label}-${index}`}
+                  className="flex justify-between gap-4 py-2 border-b border-[#E2D7C6]"
+                >
+                  <span className="text-[#867363]">{specification.label}</span>
+                  <span
+                    className="font-medium text-[#2B2018] text-right tabular-nums"
+                  >
+                    {specification.value}
                   </span>
                 </div>
-              )}
-              <div className="flex justify-between gap-4 py-2 border-b border-[#E2D7C6]">
-                <span className="text-[#867363]">Nghệ nhân / Xưởng</span>
-                <span className="font-medium text-[#2B2018] text-right">
-                  {product.artisanName}
-                </span>
-              </div>
+              ))}
               <div className="pt-1">
                 <span className="text-[#867363] block mb-1">Hướng dẫn bảo quản</span>
                 <p className="leading-relaxed text-[#2B2018]">{product.careGuide}</p>

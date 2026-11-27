@@ -29,6 +29,11 @@ export interface ProductVariant {
   stock: number;
 }
 
+export interface ProductSpecification {
+  label: string;
+  value: string;
+}
+
 export interface Product {
   id: string;
   sku: string;
@@ -44,6 +49,7 @@ export interface Product {
   story: string;
   dimensions: string;
   weight?: string;
+  specifications?: ProductSpecification[];
   careGuide: string;
   artisanName: string;
   craftDays: number;
@@ -108,6 +114,7 @@ export interface OrderItemSnapshot {
 }
 
 export type OrderStatus =
+  | 'Chờ duyệt giá và tồn kho'
   | 'Chờ xác nhận'
   | 'Đang đóng gói chống sốc'
   | 'Đang giao hàng'
@@ -115,6 +122,10 @@ export type OrderStatus =
   | 'Đã hủy';
 
 export type PaymentStatus =
+  | 'awaiting_admin_review'
+  | 'pending_payment'
+  | 'awaiting_confirmation'
+  | 'paid'
   | 'Đã thanh toán trực tuyến'
   | 'Đã xác nhận chuyển khoản'
   | 'Chờ xác nhận thanh toán'
@@ -133,6 +144,9 @@ export interface Order {
   paymentMethod: PaymentMethod;
   ewalletProvider?: EWalletProvider;
   paymentReference?: string;
+  paymentSubmittedAt?: string;
+  paymentConfirmedAt?: string;
+  paymentNote?: string;
   paymentStatus: PaymentStatus;
   orderStatus: OrderStatus | string;
   estimatedDelivery: string;
@@ -140,6 +154,10 @@ export interface Order {
   discount: number;
   shippingFee: number;
   total: number;
+  quotedSubtotal?: number;
+  quotedDiscount?: number;
+  quotedShippingFee?: number;
+  quotedTotal?: number;
   promoCode?: string;
   items: OrderItemSnapshot[];
 }

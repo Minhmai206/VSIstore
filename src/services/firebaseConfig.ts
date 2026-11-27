@@ -4,8 +4,23 @@ import {
   getAnalytics,
   isSupported as isAnalyticsSupported,
 } from 'firebase/analytics';
-import { Auth, getAuth } from 'firebase/auth';
-import { Firestore, getFirestore } from 'firebase/firestore';
+import {
+  Auth,
+  browserLocalPersistence,
+  connectAuthEmulator,
+  getAuth,
+  setPersistence,
+} from 'firebase/auth';
+import {
+  Firestore,
+  connectFirestoreEmulator,
+  getFirestore,
+} from 'firebase/firestore';
+import {
+  Functions,
+  connectFunctionsEmulator,
+  getFunctions,
+} from 'firebase/functions';
 
 export interface FirebaseEnvConfig {
   apiKey: string;
@@ -58,6 +73,11 @@ let cachedApp: FirebaseApp | null = null;
 let cachedDb: Firestore | null = null;
 let cachedAuth: Auth | null = null;
 let cachedAnalytics: Analytics | null = null;
+let cachedFunctions: Functions | null = null;
+
+function shouldUseFirebaseEmulators(): boolean {
+  return import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true';
+}
 
 function getFirebaseApp(): FirebaseApp | null {
   if (!isFirebaseConfigured()) return null;
@@ -76,7 +96,12 @@ export function getFirestoreInstance(): Firestore | null {
   try {
     const app = getFirebaseApp();
     if (!app) return null;
-    if (!cachedDb) cachedDb = getFirestore(app);
+    if (!cachedDb) {
+      cachedDb = getFirestore(app);
+      if (shouldUseFirebaseEmulators()) {
+        connectFirestoreEmulator(cachedDb, '127.0.0.1', 8080);
+      }
+    }
     return cachedDb;
   } catch {
     return null;
@@ -87,8 +112,34 @@ export function getFirebaseAuthInstance(): Auth | null {
   try {
     const app = getFirebaseApp();
     if (!app) return null;
-    if (!cachedAuth) cachedAuth = getAuth(app);
+    if (!cachedAuth) {
+      cachedAuth = getAuth(app);
+      void setPersistence(cachedAuth, browserLocalPersistence).catch((error) => {
+        console.warn('Không thể bật duy trì phiên đăng nhập Firebase.', error);
+      });
+      if (shouldUseFirebaseEmulators()) {
+        connectAuthEmulator(cachedAuth, 'http://127.0.0.1:9099', {
+          disableWarnings: true,
+        });
+      }
+    }
     return cachedAuth;
+  } catch {
+    return null;
+  }
+}
+
+export function getFirebaseFunctionsInstance(): Functions | null {
+  try {
+    const app = getFirebaseApp();
+    if (!app) return null;
+    if (!cachedFunctions) {
+      cachedFunctions = getFunctions(app, 'asia-southeast1');
+      if (shouldUseFirebaseEmulators()) {
+        connectFunctionsEmulator(cachedFunctions, '127.0.0.1', 5001);
+      }
+    }
+    return cachedFunctions;
   } catch {
     return null;
   }

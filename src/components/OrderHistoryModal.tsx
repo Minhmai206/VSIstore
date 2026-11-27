@@ -1,7 +1,11 @@
 import { useEffect } from 'react';
 import { CheckCircle2, PackageCheck, X } from 'lucide-react';
 import { Order } from '../types/shop';
-import { formatOrderDate, formatVND } from '../utils/format';
+import {
+  formatAddressWithCity,
+  formatOrderDate,
+  formatVND,
+} from '../utils/format';
 
 const TRACKING_STEPS = [
   'Chờ xác nhận',
@@ -105,9 +109,29 @@ export function OrderHistoryModal({
                       Đặt lúc {formatOrderDate(order.createdAt)}
                     </p>
                   </div>
-                  <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#3F5E3B]">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>{order.paymentStatus}</span>
+                  <div
+                    className={`inline-flex items-center gap-1.5 text-xs font-medium ${
+                      order.paymentStatus === 'paid'
+                        ? 'text-[#3F5E3B]'
+                        : 'text-[#073D63]'
+                    }`}
+                  >
+                    {order.paymentStatus === 'paid' ? (
+                      <CheckCircle2 className="w-4 h-4" />
+                    ) : (
+                      <PackageCheck className="w-4 h-4" />
+                    )}
+                    <span>
+                      {order.paymentStatus === 'awaiting_admin_review'
+                        ? 'Chờ cửa hàng xác nhận giá và tồn kho'
+                        : order.paymentStatus === 'pending_payment'
+                        ? 'Chờ thanh toán'
+                        : order.paymentStatus === 'awaiting_confirmation'
+                          ? 'Đã báo chuyển khoản · chờ admin'
+                          : order.paymentStatus === 'paid'
+                            ? 'Đã thanh toán'
+                            : order.paymentStatus}
+                    </span>
                   </div>
                 </div>
 
@@ -120,9 +144,11 @@ export function OrderHistoryModal({
                       <span className="text-[#2B2018]">
                         {item.name} ({item.variantLabel}) × {item.quantity}
                       </span>
-                      <span className="tabular-nums font-medium text-[#2B2018] shrink-0">
-                        {formatVND(item.unitPrice * item.quantity)}
-                      </span>
+                      {order.orderStatus !== 'Chờ duyệt giá và tồn kho' && (
+                        <span className="tabular-nums font-medium text-[#2B2018] shrink-0">
+                          {formatVND(item.unitPrice * item.quantity)}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -166,12 +192,34 @@ export function OrderHistoryModal({
 
                 <div className="pt-3 border-t border-[#E2D7C6] flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="text-[#5E4B3C]">
-                    Giao đến: {order.address}, {order.city} · Dự kiến{' '}
-                    {order.estimatedDelivery}
+                    Giao đến:{' '}
+                    {formatAddressWithCity(order.address, order.city)}
+                    {order.estimatedDelivery
+                      ? ` · Dự kiến ${order.estimatedDelivery}`
+                      : ' · Chờ xác nhận thời gian giao'}
                   </span>
-                  <span className="text-sm font-semibold text-[#073D63] tabular-nums">
-                    Tổng: {formatVND(order.total)}
-                  </span>
+                  {order.orderStatus === 'Chờ duyệt giá và tồn kho' ? (
+                    <span className="text-xs text-[#867363]">
+                      Cửa hàng sẽ xác nhận giá và tồn kho trước khi thanh toán.
+                    </span>
+                  ) : (
+                    <>
+                      <span className="text-sm font-semibold text-[#073D63] tabular-nums">
+                        Tiền hàng: {formatVND(order.subtotal ?? order.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0))}
+                      </span>
+                      {(order.discount ?? 0) > 0 && (
+                        <span className="text-xs tabular-nums text-[#5E4B3C]">
+                          Giảm: {formatVND(order.discount ?? 0)}
+                        </span>
+                      )}
+                      <span className="text-xs tabular-nums text-[#5E4B3C]">
+                        Phí ship: {formatVND(order.shippingFee ?? 35000)}
+                      </span>
+                      <span className="text-sm font-semibold text-[#073D63] tabular-nums">
+                        Tổng: {formatVND(order.total)}
+                      </span>
+                    </>
+                  )}
                 </div>
                 </div>
               );

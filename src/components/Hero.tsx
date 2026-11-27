@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
+import { SITE_CONFIG } from '../config/site';
 import { HERO_IMAGES } from '../data/products';
 import { ResilientImage } from './ResilientImage';
 
@@ -27,18 +28,18 @@ export function Hero({ onExploreClick }: HeroProps) {
           <div className="lg:col-span-5 flex flex-col justify-between py-2">
             <div className="space-y-6">
               <p className="text-xs font-medium tracking-wider text-[#867363]">
-                VSI - CÔNG TY TNHH GIÁO DỤC ĐỔI MỚI SÁNG TẠO STEM VIỆT NAM
+                {SITE_CONFIG.brandName} - {SITE_CONFIG.legalName}
               </p>
 
               <h1
                 className="font-bold text-[#2B2018] leading-[1.15] tracking-tight"
                 style={{ fontSize: 'clamp(2rem, 3.4vw, 3.1rem)' }}
               >
-              GIÁO DỤC ĐỔI MỚI SÁNG TẠO STEM VIỆT NAM
+                {SITE_CONFIG.hero.heading}
               </h1>
 
               <p className="text-base leading-relaxed text-[#5E4B3C] max-w-md">
-                Mỗi sản phẩm đều góp phần đem lại sự sáng tạo khi sử dụng, góp phần đem lại kiến thức về công nghệ và thủ công trong thời đại số.
+                {SITE_CONFIG.hero.description}
               </p>
 
               <div className="flex flex-wrap items-center gap-5 pt-2">
@@ -47,7 +48,7 @@ export function Hero({ onExploreClick }: HeroProps) {
                   onClick={onExploreClick}
                   className="inline-flex items-center gap-2.5 px-6 py-3 rounded-lg bg-[#073D63] hover:bg-[#5E3A1F] text-[#FCF9F5] text-sm font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#073D63]"
                 >
-                  <span>Khám Phá Sản Phẩm </span>
+                  <span>{SITE_CONFIG.hero.exploreLabel} </span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
 
@@ -55,36 +56,22 @@ export function Hero({ onExploreClick }: HeroProps) {
                   href="#lang-nghe"
                   className="text-sm font-medium text-[#5E4B3C] hover:text-[#2B2018] underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
                 >
-                  Giới thiệu về VSI 
+                  {SITE_CONFIG.hero.aboutLabel}
                 </a>
               </div>
             </div>
 
-            <div className="mt-10 pt-6 border-t border-[#E2D7C6] grid grid-cols-3 gap-4">
-              <div>
-                <p className="font-serif text-2xl font-semibold text-[#2B2018] tabular-nums">
-                  Các Sản Phẩm
-                </p>
-                <p className="text-xs text-[#867363] mt-0.5">
-                  Đảm bảo chất lượng
-                </p>
-              </div>
-              <div>
-                <p className="font-serif text-2xl font-semibold text-[#2B2018] tabular-nums">
-                  100% Nguyên Liệu
-                </p>
-                <p className="text-xs text-[#867363] mt-0.5">
-                  Hoạt động vì môi trường
-                </p>
-              </div>
-              <div>
-                <p className="font-serif text-2xl font-semibold text-[#2B2018] tabular-nums">
-                  Từ 1,5 triệu
-                </p>
-                <p className="text-xs text-[#867363] mt-0.5">
-                  Miễn phí giao toàn quốc
-                </p>
-              </div>
+            <div className="mt-10 pt-6 border-t border-[#E2D7C6] grid grid-cols-3 gap-3 md:gap-4">
+              {SITE_CONFIG.hero.stats.map((stat) => (
+                <div key={stat.label} className="min-w-0">
+                  <p className="font-serif text-base font-semibold leading-tight text-[#2B2018] tabular-nums sm:text-lg md:text-xl">
+                    {stat.value}
+                  </p>
+                  <p className="mt-0.5 break-words text-[11px] leading-snug text-[#867363] sm:text-xs">
+                    {stat.label}
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -102,7 +89,7 @@ export function Hero({ onExploreClick }: HeroProps) {
                   <div key={image} className="h-full w-1/3 shrink-0">
                     <ResilientImage
                       src={image}
-                      alt={`Hình ảnh giới thiệu VSI ${index + 1}`}
+                      alt={`Hình ảnh giới thiệu ${SITE_CONFIG.brandName} ${index + 1}`}
                       className="h-full w-full object-contain"
                     />
                   </div>

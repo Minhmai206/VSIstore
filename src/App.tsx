@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, X } from 'lucide-react';
-import { AdminDashboard } from './components/AdminDashboard';
 import {
   CartCheckoutDrawer,
   DrawerStep,
@@ -21,8 +20,11 @@ import { OrderHistoryModal } from './components/OrderHistoryModal';
 import { ProductDetailModal } from './components/ProductDetailModal';
 import { SmartCatalog } from './components/SmartCatalog';
 import { TopBanner } from './components/TopBanner';
+import { SITE_CONFIG } from './config/site';
 import {
   confirmStoreOrderPayment,
+  approveStoreOrder,
+  clearAllStoreOrders,
   createStoreOrder,
   deleteStoreProduct,
   fetchAdminOrders,
@@ -32,13 +34,18 @@ import {
   observeAdminOrders,
   observeCustomerOrders,
   saveStoreProduct,
+  submitCustomerOrderPayment,
   updateStoreOrderStatus,
+  readCachedStoreProducts,
+  writeCachedStoreProducts,
 } from './services/storeRepository';
 import {
   CustomerProfile,
   observeCustomerSession,
   signOutCustomer,
 } from './services/customerRepository';
+import { observeAdminAuthorization } from './services/adminRepository';
+import type { AdminAuthorization } from './services/adminRepository';
 import { initializeFirebaseAnalytics } from './services/firebaseConfig';
 import {
   CartItem,
@@ -48,8 +55,43 @@ import {
   OrderStatus,
   Product,
 } from './types/shop';
+import { removeVietnameseDiacritics } from './utils/format';
 
 const CART_STORAGE_KEY = 'moc_dat_cart_v1';
+type AppRoute =
+  | { type: 'home' }
+  | { type: 'product'; slug: string }
+  | { type: 'admin' }
+  | { type: 'not-found' };
+type AdminAuthorizationState =
+  | 'inactive'
+  | 'checking'
+  | AdminAuthorization
+  | 'error';
+
+const AdminDashboard = lazy(() =>
+  import('./components/AdminDashboard').then(({ AdminDashboard: component }) => ({
+    default: component,
+  }))
+);
+
+function parseAppRoute(pathname: string): AppRoute {
+  const normalizedPath = pathname.replace(/\/+$/, '') || '/';
+  if (normalizedPath === '/') return { type: 'home' };
+  if (normalizedPath === '/admin') return { type: 'admin' };
+
+  const productMatch = normalizedPath.match(/^\/san-pham\/([^/]+)$/);
+  if (productMatch) return { type: 'product', slug: productMatch[1] };
+
+  return { type: 'not-found' };
+}
+
+function getProductSlug(product: Product): string {
+  const nameSlug = removeVietnameseDiacritics(product.name)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `${nameSlug || 'san-pham'}-${encodeURIComponent(product.id)}`;
+}
 
 const DEFAULT_FILTERS: FilterState = {
   query: '',
@@ -63,8 +105,19 @@ const DEFAULT_FILTERS: FilterState = {
 };
 
 export default function App() {
-  const [view, setView] = useState<'store' | 'admin'>('store');
+  const [pathname, setPathname] = useState(() => window.location.pathname);
+  const [view, setView] = useState<'store' | 'admin'>(
+    () => (parseAppRoute(window.location.pathname).type === 'admin' ? 'admin' : 'store')
+  );
   const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminAuthorization, setAdminAuthorization] =
+    useState<AdminAuthorizationState>(() =>
+      parseAppRoute(window.location.pathname).type === 'admin'
+        ? 'checking'
+        : 'inactive'
+    );
+  const [adminAuthorizationError, setAdminAuthorizationError] = useState<string | null>(null);
+  const [adminAuthorizationRetry, setAdminAuthorizationRetry] = useState(0);
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
 
@@ -76,14 +129,34 @@ export default function App() {
   const [ordersModalOpen, setOrdersModalOpen] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const adminInitialization = useRef<Promise<void> | null>(null);
+  const route = parseAppRoute(pathname);
 
-  const [products, setProducts] = useState<Product[]>([]);
+  const navigateTo = (path: string, replace = false) => {
+    if (window.location.pathname !== path) {
+      if (replace) {
+        window.history.replaceState({}, '', path);
+      } else {
+        window.history.pushState({}, '', path);
+      }
+    }
+    setPathname(window.location.pathname);
+  };
+
+  const [initialCachedProducts] = useState<Product[] | null>(
+    () => readCachedStoreProducts()
+  );
+  const [products, setProducts] = useState<Product[]>(
+    () => initialCachedProducts ?? []
+  );
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsLoadError, setProductsLoadError] = useState<string | null>(null);
   const [productsReloadKey, setProductsReloadKey] = useState(0);
   const [orders, setOrders] = useState<Order[]>([]);
   const [adminOrders, setAdminOrders] = useState<Order[]>([]);
   const [orderNotice, setOrderNotice] = useState<string | null>(null);
+  const [initialReceiptOrder, setInitialReceiptOrder] =
+    useState<Order | null>(null);
   const observedCustomerOrders = useRef<{
     uid: string | null;
     states: Map<string, { paymentStatus: string; orderStatus: string }>;
@@ -98,6 +171,101 @@ export default function App() {
     }
   });
 
+  useEffect(() => {
+    const handlePopState = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const query = params.get('q') ?? '';
+    const category = params.get('category');
+    const sortBy = params.get('sort');
+    if (!query && !category && !sortBy) return;
+    setFilters((current) => ({
+      ...current,
+      query,
+      ...(category ? { category: category as CraftCategory } : {}),
+      ...(sortBy &&
+      ['featured', 'newest', 'price-asc', 'price-desc', 'rating-desc'].includes(
+        sortBy
+      )
+        ? {
+            sortBy: sortBy as FilterState['sortBy'],
+          }
+        : {}),
+    }));
+  }, []);
+
+  useEffect(() => {
+    const routeType = parseAppRoute(pathname).type;
+    if (routeType === 'admin' || routeType === 'not-found') return;
+    const params = new URLSearchParams();
+    if (filters.query.trim()) params.set('q', filters.query.trim());
+    if (filters.category !== 'Tất Cả') params.set('category', filters.category);
+    if (filters.sortBy !== 'featured') params.set('sort', filters.sortBy);
+    const search = params.toString();
+    const nextUrl = `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`;
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {
+      window.history.replaceState({}, '', nextUrl);
+    }
+  }, [filters, pathname]);
+
+  useEffect(() => {
+    if (route.type === 'admin') {
+      setView('admin');
+      setSelectedProduct(null);
+      setAccountModalOpen(false);
+      return;
+    }
+
+    setView('store');
+    setAccountModalOpen(false);
+    setAdminUnlocked(false);
+    setAdminAuthorization('inactive');
+    setAdminAuthorizationError(null);
+    if (route.type !== 'product') setSelectedProduct(null);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (parseAppRoute(pathname).type !== 'admin') return;
+
+    setAdminAuthorization('checking');
+    setAdminAuthorizationError(null);
+    return observeAdminAuthorization(
+      (authorization) => {
+        setAdminAuthorization(authorization);
+        if (authorization === 'unauthorized') {
+          setAdminUnlocked(false);
+          setAdminOrders([]);
+          setAccountModalOpen(true);
+        } else {
+          setAccountModalOpen(false);
+        }
+      },
+      (error) => {
+        console.error('Không thể xác minh quyền quản trị:', error);
+        setAdminAuthorizationError(error.message);
+        setAdminAuthorization('error');
+      }
+    );
+  }, [adminAuthorizationRetry, pathname]);
+
+  useEffect(() => {
+    const currentRoute = parseAppRoute(pathname);
+    if (currentRoute.type !== 'product') return;
+
+    const matchedProduct = products.find(
+      (product) => getProductSlug(product) === currentRoute.slug
+    );
+    if (matchedProduct) {
+      setSelectedProduct(matchedProduct);
+    } else if (!productsLoading && !productsLoadError) {
+      setSelectedProduct(null);
+    }
+  }, [pathname, products, productsLoadError, productsLoading]);
+
   // Products are public; orders are loaded only after customer/admin authentication.
   useEffect(() => {
     let active = true;
@@ -110,7 +278,6 @@ export default function App() {
       .catch((error: unknown) => {
         if (!active) return;
         console.error('Không thể tải sản phẩm:', error);
-        setProducts([]);
         setProductsLoadError(
           error instanceof Error
             ? error.message
@@ -188,11 +355,18 @@ export default function App() {
       if (order.customerUid !== customer.uid) continue;
       const previous = previousStates.get(order.orderNumber);
       if (previous && previous.paymentStatus !== order.paymentStatus) {
-        if (order.paymentStatus === 'Đã xác nhận chuyển khoản') {
-          notice = `Đơn #${order.orderNumber}: quản trị viên đã xác nhận thanh toán.`;
+        if (order.paymentStatus === 'paid') {
+          notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber}: quản trị viên đã xác nhận thanh toán.`;
+        } else if (order.paymentStatus === 'awaiting_confirmation') {
+          notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber}: cửa hàng đang đối chiếu giao dịch.`;
+        } else if (
+          order.paymentStatus === 'pending_payment' &&
+          previous.paymentStatus === 'awaiting_confirmation'
+        ) {
+          notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber}: giao dịch chưa được xác nhận. Kiểm tra ghi chú trong lịch sử đơn hàng.`;
         }
       } else if (previous && previous.orderStatus !== order.orderStatus) {
-        notice = `Đơn #${order.orderNumber} cập nhật: ${order.orderStatus}.`;
+        notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber} cập nhật: ${order.orderStatus}.`;
       }
       nextStates.set(order.orderNumber, {
         paymentStatus: order.paymentStatus,
@@ -208,6 +382,18 @@ export default function App() {
     const timeoutId = window.setTimeout(() => setOrderNotice(null), 8000);
     return () => window.clearTimeout(timeoutId);
   }, [orderNotice]);
+
+  useEffect(() => {
+    if (!drawerOpen || drawerStep !== 'receipt' || !initialReceiptOrder) return;
+    const currentOrder = orders.find(
+      (order) => order.orderNumber === initialReceiptOrder.orderNumber
+    );
+    if (currentOrder?.paymentStatus !== 'paid') return;
+
+    setDrawerOpen(false);
+    setDrawerStep('cart');
+    setInitialReceiptOrder(null);
+  }, [drawerOpen, drawerStep, initialReceiptOrder, orders]);
 
   useEffect(() => {
     let active = true;
@@ -239,6 +425,13 @@ export default function App() {
     () => cart.reduce((sum, item) => sum + item.quantity, 0),
     [cart]
   );
+  const footerCategories = useMemo(
+    () =>
+      SITE_CONFIG.footerCategories.filter((category) =>
+        products.some((product) => product.category === category)
+      ),
+    [products]
+  );
 
   const handleUpdateFilters = (patch: Partial<FilterState>) => {
     setFilters((prev) => ({ ...prev, ...patch }));
@@ -246,6 +439,16 @@ export default function App() {
 
   const handleResetFilters = () => {
     setFilters(DEFAULT_FILTERS);
+  };
+
+  const handleSelectProduct = (product: Product) => {
+    setSelectedProduct(product);
+    navigateTo(`/san-pham/${getProductSlug(product)}`);
+  };
+
+  const handleCloseProduct = () => {
+    setSelectedProduct(null);
+    if (route.type === 'product') navigateTo('/');
   };
 
   const handleAddToCart = (
@@ -275,6 +478,7 @@ export default function App() {
   ) => {
     handleAddToCart(product, variantId, quantity);
     setSelectedProduct(null);
+    if (route.type === 'product') navigateTo('/');
     setDrawerStep('checkout');
     setDrawerOpen(true);
   };
@@ -306,25 +510,41 @@ export default function App() {
   const handleCompleteOrder = async (order: Order): Promise<Order> => {
     const savedOrder = await createStoreOrder(order);
     setOrders((prev) => [savedOrder, ...prev]);
+    setInitialReceiptOrder(savedOrder);
     setCart([]);
     return savedOrder;
+  };
+
+  const handleMarkPaymentSent = async (orderNumber: string): Promise<void> => {
+    await submitCustomerOrderPayment(orderNumber);
   };
 
   const handleSaveProduct = async (updatedProduct: Product) => {
     await saveStoreProduct(updatedProduct);
     setProducts((prev) => {
       const exists = prev.some((p) => p.id === updatedProduct.id);
-      if (exists) {
-        return prev.map((p) => (p.id === updatedProduct.id ? updatedProduct : p));
-      }
-      return [updatedProduct, ...prev];
+      const next = exists
+        ? prev.map((p) => (p.id === updatedProduct.id ? updatedProduct : p))
+        : [updatedProduct, ...prev];
+      writeCachedStoreProducts(next);
+      return next;
     });
   };
 
   const handleDeleteProduct = async (productId: string) => {
     await deleteStoreProduct(productId);
-    setProducts((prev) => prev.filter((p) => p.id !== productId));
+    setProducts((prev) => {
+      const next = prev.filter((p) => p.id !== productId);
+      writeCachedStoreProducts(next);
+      return next;
+    });
     setCart((prev) => prev.filter((item) => item.productId !== productId));
+  };
+
+  const handleRetryProducts = () => {
+    setProductsLoadError(null);
+    setProductsLoading(true);
+    setProductsReloadKey((key) => key + 1);
   };
 
   const handleUpdateOrderStatus = async (
@@ -341,34 +561,102 @@ export default function App() {
     );
   };
 
-  const handleConfirmOrderPayment = async (orderNumber: string) => {
-    await confirmStoreOrderPayment(orderNumber);
+  const handleConfirmOrderPayment = async (
+    orderNumber: string,
+    received: boolean,
+    note?: string
+  ) => {
+    await confirmStoreOrderPayment(orderNumber, received, note);
+    setOrders((prev) =>
+      prev.map((order) =>
+        order.orderNumber === orderNumber
+          ? {
+              ...order,
+              paymentStatus: received ? 'paid' : 'pending_payment',
+              ...(received ? {} : { paymentNote: note }),
+            }
+          : order
+      )
+    );
     setAdminOrders((prev) =>
       prev.map((order) =>
         order.orderNumber === orderNumber
-          ? { ...order, paymentStatus: 'Đã xác nhận chuyển khoản' }
+          ? {
+              ...order,
+              paymentStatus: received ? 'paid' : 'pending_payment',
+              ...(note ? { paymentNote: note } : {}),
+            }
           : order
       )
     );
   };
 
+  const handleClearAllOrders = async () => {
+    await clearAllStoreOrders();
+    setOrders([]);
+    setAdminOrders([]);
+  };
+
+  const handleApproveOrder = async (orderNumber: string): Promise<Order> => {
+    const currentProducts = await fetchStoreProducts();
+    setProducts(currentProducts);
+    const approvedOrder = await approveStoreOrder(orderNumber, currentProducts);
+    setAdminOrders((prev) =>
+      prev.map((order) =>
+        order.orderNumber === orderNumber ? approvedOrder : order
+      )
+    );
+    return approvedOrder;
+  };
+
   const handleAdminAuthenticated = async () => {
-    try {
+    if (adminInitialization.current) {
+      await adminInitialization.current;
+      return;
+    }
+
+    const initialization = (async () => {
       const [loadedProducts, loadedOrders] = await Promise.all([
-          initializeAdminProducts(),
-          fetchAdminOrders(),
+        initializeAdminProducts(),
+        fetchAdminOrders(),
       ]);
       setProducts(loadedProducts);
       setAdminOrders(loadedOrders);
       setAdminUnlocked(true);
+      setAdminAuthorization('authorized');
+      setAdminAuthorizationError(null);
       setAccountModalOpen(false);
       setView('admin');
+      navigateTo('/admin');
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    } catch (error) {
-      await signOutCustomer();
-      throw error;
+    })();
+    adminInitialization.current = initialization;
+    try {
+      await initialization;
+    } finally {
+      if (adminInitialization.current === initialization) {
+        adminInitialization.current = null;
+      }
     }
   };
+
+  useEffect(() => {
+    if (
+      parseAppRoute(pathname).type !== 'admin' ||
+      adminAuthorization !== 'authorized' ||
+      adminUnlocked
+    ) {
+      return;
+    }
+
+    void handleAdminAuthenticated().catch((error: unknown) => {
+      console.error('Không thể tải dữ liệu quản trị:', error);
+      setAdminAuthorizationError(
+        error instanceof Error ? error.message : 'Không thể tải dữ liệu quản trị.'
+      );
+      setAdminAuthorization('error');
+    });
+  }, [adminAuthorization, adminUnlocked, pathname]);
 
   const handleAdminExit = async () => {
     await signOutCustomer();
@@ -376,6 +664,7 @@ export default function App() {
     setOrders([]);
     setAdminOrders([]);
     setView('store');
+    navigateTo('/');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -400,23 +689,103 @@ export default function App() {
     () => (customer ? orders.filter((order) => order.customerUid === customer.uid) : []),
     [customer, orders]
   );
+  const routeProduct =
+    route.type === 'product'
+      ? products.find((product) => getProductSlug(product) === route.slug)
+      : undefined;
+  useEffect(() => {
+    if (route.type === 'product' && routeProduct) {
+      document.title = `${routeProduct.name} | ${SITE_CONFIG.brandName}`;
+    } else if (route.type === 'admin') {
+      document.title = `Quản trị | ${SITE_CONFIG.brandName}`;
+    } else {
+      document.title = SITE_CONFIG.brandName;
+    }
+  }, [route.type, route.type === 'product' ? route.slug : '', routeProduct]);
+  const productRouteNotFound =
+    route.type === 'product' &&
+    !routeProduct &&
+    !productsLoading &&
+    !productsLoadError;
 
   if (view === 'admin' && adminUnlocked) {
     return (
-      <AdminDashboard
-        products={products}
-        orders={adminOrders}
-        onBackToStore={() => {
-          void handleAdminExit();
-        }}
-        onLockAdmin={() => {
-          void handleAdminExit();
-        }}
-        onSaveProduct={handleSaveProduct}
-        onDeleteProduct={handleDeleteProduct}
-        onUpdateOrderStatus={handleUpdateOrderStatus}
-        onConfirmOrderPayment={handleConfirmOrderPayment}
-      />
+      <Suspense
+        fallback={
+          <div
+            className="flex min-h-screen items-center justify-center bg-[#F8F4EE] text-sm text-[#5E4B3C]"
+            role="status"
+          >
+            Đang tải trang quản trị...
+          </div>
+        }
+      >
+        <AdminDashboard
+          products={products}
+          orders={adminOrders}
+          onBackToStore={() => {
+            void handleAdminExit();
+          }}
+          onLockAdmin={() => {
+            void handleAdminExit();
+          }}
+          onSaveProduct={handleSaveProduct}
+          onDeleteProduct={handleDeleteProduct}
+          onUpdateOrderStatus={handleUpdateOrderStatus}
+          onConfirmOrderPayment={handleConfirmOrderPayment}
+          onApproveOrder={handleApproveOrder}
+          onClearAllOrders={handleClearAllOrders}
+        />
+      </Suspense>
+    );
+  }
+
+  if (
+    route.type === 'admin' &&
+    (adminAuthorization === 'checking' ||
+      (adminAuthorization === 'authorized' && !adminUnlocked))
+  ) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center bg-[#F8F4EE] text-sm text-[#5E4B3C]"
+        role="status"
+      >
+        Đang xác minh và tải trang quản trị...
+      </div>
+    );
+  }
+
+  if (route.type === 'admin' && adminAuthorization === 'error') {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-[#F8F4EE] px-4 text-center text-[#2B2018]">
+        <h1 className="text-xl font-semibold">Không thể xác minh quyền quản trị</h1>
+        <p role="alert" className="mt-2 max-w-lg text-sm text-[#5E4B3C]">
+          {adminAuthorizationError}
+        </p>
+        <button
+          type="button"
+          onClick={() => setAdminAuthorizationRetry((retry) => retry + 1)}
+          className="mt-6 rounded-lg bg-[#073D63] px-5 py-2.5 text-sm font-medium text-[#FCF9F5]"
+        >
+          Thử lại
+        </button>
+      </main>
+    );
+  }
+
+  if (route.type === 'not-found' || productRouteNotFound) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-[#F8F4EE] px-4 text-center text-[#2B2018]">
+        <p className="text-sm font-semibold uppercase tracking-widest text-[#867363]">404</p>
+        <h1 className="mt-2 text-2xl font-semibold">Không tìm thấy trang</h1>
+        <button
+          type="button"
+          onClick={() => navigateTo('/')}
+          className="mt-6 rounded-lg bg-[#073D63] px-5 py-2.5 text-sm font-medium text-[#FCF9F5]"
+        >
+          Quay về cửa hàng
+        </button>
+      </main>
     );
   }
 
@@ -433,7 +802,7 @@ export default function App() {
         searchQuery={filters.query}
         products={products}
         onSearchChange={(value) => handleUpdateFilters({ query: value })}
-        onSelectProduct={(product) => setSelectedProduct(product)}
+        onSelectProduct={handleSelectProduct}
         onSearchSubmit={handleExploreCollection}
         onOpenCart={() => {
           setDrawerStep('cart');
@@ -452,10 +821,10 @@ export default function App() {
           productsLoading={productsLoading}
           productsLoadError={productsLoadError}
           filters={filters}
-          onRetryProducts={() => setProductsReloadKey((key) => key + 1)}
+          onRetryProducts={handleRetryProducts}
           onUpdateFilters={handleUpdateFilters}
           onResetFilters={handleResetFilters}
-          onSelectProduct={(product) => setSelectedProduct(product)}
+          onSelectProduct={handleSelectProduct}
           onQuickAdd={(product, variantId) =>
             handleAddToCart(product, variantId, 1)
           }
@@ -466,6 +835,7 @@ export default function App() {
       </main>
 
       <Footer
+        categories={footerCategories}
         onSelectCategory={handleSelectCategoryFromFooter}
         onOpenOrders={handleOpenOrders}
       />
@@ -506,12 +876,16 @@ export default function App() {
       <CustomerAccountModal
         isOpen={accountModalOpen}
         customer={customer}
-        onClose={() => setAccountModalOpen(false)}
+        onClose={() => {
+          setAccountModalOpen(false);
+          if (route.type === 'admin' && !adminUnlocked) navigateTo('/');
+        }}
         onCustomerAuthenticated={async (profile) => {
           const loadedOrders = await fetchCustomerOrders(profile.uid);
           setCustomer(profile);
           setOrders(loadedOrders);
           setAccountModalOpen(false);
+          if (route.type === 'admin') navigateTo('/');
         }}
         onOpenOrders={() => {
           setAccountModalOpen(false);
@@ -527,7 +901,7 @@ export default function App() {
 
       <ProductDetailModal
         product={selectedProduct}
-        onClose={() => setSelectedProduct(null)}
+        onClose={handleCloseProduct}
         onAddToCart={handleAddToCart}
         onBuyNow={handleBuyNow}
       />
@@ -546,6 +920,8 @@ export default function App() {
         onOpenAccount={() => setAccountModalOpen(true)}
         customer={customer}
         customerOrders={orders}
+        onMarkPaymentSent={handleMarkPaymentSent}
+        initialReceiptOrder={initialReceiptOrder}
       />
 
       <OrderHistoryModal
