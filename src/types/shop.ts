@@ -29,6 +29,11 @@ export interface ProductVariant {
   stock: number;
 }
 
+export interface ProductSpecification {
+  label: string;
+  value: string;
+}
+
 export interface Product {
   id: string;
   sku: string;
@@ -44,6 +49,7 @@ export interface Product {
   story: string;
   dimensions: string;
   weight?: string;
+  specifications?: ProductSpecification[];
   careGuide: string;
   artisanName: string;
   craftDays: number;

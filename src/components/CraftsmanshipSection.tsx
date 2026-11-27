@@ -8,6 +8,7 @@ import {
   Star,
 } from 'lucide-react';
 import { CRAFT_REVIEWS, WORKSHOP_IMAGE } from '../data/products';
+import { SITE_CONFIG } from '../config/site';
 import { CraftReview } from '../types/shop';
 import { ResilientImage } from './ResilientImage';
 
@@ -145,7 +146,12 @@ export function CraftsmanshipSection() {
   }, []);
 
   useEffect(() => {
-    if (carouselPaused || reducedMotion || reviewCount < 2) return;
+    if (
+      !SITE_CONFIG.showCustomerReviews ||
+      carouselPaused ||
+      reducedMotion ||
+      reviewCount < 2
+    ) return;
     const timeoutId = window.setTimeout(
       () => setActiveReview((index) => (index + 1) % reviewCount),
       5500
@@ -258,7 +264,7 @@ export function CraftsmanshipSection() {
                 Công cụ phù hợp, ý tưởng sáng tạo thành sản phẩm
               </h2>
               <p className="text-base leading-relaxed text-[#5E4B3C]">
-                VSI cung cấp các công cụ kỹ thuật và bộ kit tự làm tại nhà cho
+                {SITE_CONFIG.brandName} cung cấp các công cụ kỹ thuật và bộ kit tự làm tại nhà cho
                 người thích sáng tạo. Bạn có thể chọn dụng cụ hỗ trợ cho dự án
                 của mình hoặc bắt đầu với một bộ kit như tranh gỗ DIY. Video sẽ
                 giới thiệu sản phẩm và cách thực hiện để bạn dễ hình dung trước
@@ -295,6 +301,7 @@ export function CraftsmanshipSection() {
           </div>
         </div>
 
+        {SITE_CONFIG.showCustomerReviews && (
         <div className="mt-14 border-t border-[#D7C9B4] pt-12">
           <div className="mb-8 text-center">
             <p className="text-[11px] font-semibold tracking-[0.18em] text-[#867363]">
@@ -378,6 +385,7 @@ export function CraftsmanshipSection() {
             </div>
           )}
         </div>
+        )}
       </div>
     </section>
   );

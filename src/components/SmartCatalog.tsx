@@ -10,6 +10,7 @@ import {
 import {
   QUICK_SEARCH_TERMS,
 } from '../data/products';
+import { SITE_CONFIG } from '../config/site';
 import {
   CraftCategory,
   FilterState,
@@ -221,7 +222,7 @@ export function SmartCatalog({
                     setSearchFocused(false);
                   }, 180);
                 }}
-                placeholder="Tên, chất liệu..."
+                placeholder={SITE_CONFIG.searchPlaceholder || undefined}
                 aria-label="Tìm kiếm sản phẩm"
                 className="w-full rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] py-2.5 pl-10 pr-10 text-sm text-[#2B2018] placeholder:text-[#867363] transition-colors focus:border-[#073D63] focus:outline-none"
               />

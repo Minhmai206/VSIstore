@@ -1,4 +1,5 @@
 import { X } from 'lucide-react';
+import { SITE_CONFIG } from '../config/site';
 
 interface TopBannerProps {
   visible: boolean;
@@ -18,18 +19,19 @@ export function TopBanner({
       <div className="max-w-[1280px] mx-auto px-6 md:px-10 h-10 flex items-center justify-between gap-4 text-xs">
         <div className="flex items-center gap-3 min-w-0">
           <p className="truncate font-medium">
-            Ưu đãi mùa thủ công: Nhập mã{' '}
+            {SITE_CONFIG.announcement.intro}{' '}
             <span className="font-semibold underline underline-offset-2">
-              MOCDAT10
+              {SITE_CONFIG.announcement.promoCode}
             </span>{' '}
-            giảm 10% · Miễn phí vận chuyển toàn quốc cho đơn từ 1.500.000₫
+            {SITE_CONFIG.announcement.discountLabel} ·{' '}
+            {SITE_CONFIG.announcement.shippingLabel}
           </p>
           <button
             type="button"
             onClick={onActionClick}
             className="hidden sm:inline-flex items-center font-semibold text-[#073D63] hover:text-[#2B2018] underline underline-offset-4 whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Xem bộ sưu tập
+            {SITE_CONFIG.announcement.actionLabel}
           </button>
         </div>
 

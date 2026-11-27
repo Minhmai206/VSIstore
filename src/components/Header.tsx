@@ -2,6 +2,7 @@ import { Menu, Search, ShoppingBag, UserRound, X } from 'lucide-react';
 import { useId, useMemo, useRef, useState } from 'react';
 import { Product } from '../types/shop';
 import { formatVND, scoreProductSearch } from '../utils/format';
+import { SITE_CONFIG } from '../config/site';
 import vsiLogo from '../assets/images/vsi-logo-navy.png';
 import { ResilientImage } from './ResilientImage';
 
@@ -57,12 +58,12 @@ export function Header({
       <div className="max-w-[1280px] mx-auto px-4 sm:px-6 md:px-10 h-16 flex items-center justify-between gap-4 md:gap-8">
         <a
           href="#top"
-          aria-label="VSI Education - về đầu trang"
+          aria-label={`${SITE_CONFIG.brandName} - về đầu trang`}
           className="inline-flex h-[52px] w-[100px] shrink-0 items-center justify-center overflow-hidden bg-[#063E5F] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#F2AB15] sm:w-[150px]"
         >
           <img
             src={vsiLogo}
-            alt="VSI Education"
+            alt={SITE_CONFIG.brandName}
             className="h-full w-full object-cover"
           />
         </a>
@@ -119,7 +120,7 @@ export function Header({
                   setSearchFocused(false);
                 }, 180);
               }}
-              placeholder="Tìm gốm, mây tre, gỗ..."
+              placeholder={SITE_CONFIG.searchPlaceholder || undefined}
               aria-label="Tìm kiếm nhanh sản phẩm"
               className="w-full pl-9 pr-8 py-1.5 rounded-lg bg-[#FCF9F5] border border-[#E2D7C6] text-sm text-[#2B2018] placeholder:text-[#867363] focus:outline-none focus:border-[#073D63] transition-colors"
             />
@@ -245,7 +246,7 @@ export function Header({
               autoComplete="off"
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Tìm sản phẩm thủ công..."
+              placeholder={SITE_CONFIG.searchPlaceholder || undefined}
               className="w-full pl-9 pr-3 py-2 rounded-lg bg-[#F8F4EE] border border-[#E2D7C6] text-sm text-[#2B2018] focus:outline-none focus:border-[#073D63]"
             />
           </form>

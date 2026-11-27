@@ -27,6 +27,7 @@ import {
   formatAddressWithCity,
   formatVND,
 } from '../utils/format';
+import { SITE_CONFIG } from '../config/site';
 import { CustomerProfile } from '../services/customerRepository';
 import { ResilientImage } from './ResilientImage';
 
@@ -154,7 +155,7 @@ export function CartCheckoutDrawer({
   );
 
   const discount = useMemo(() => {
-    if (appliedPromo === 'MOCDAT10') {
+    if (appliedPromo === SITE_CONFIG.announcement.promoCode) {
       return Math.round(subtotal * 0.1);
     }
     return 0;
@@ -185,12 +186,14 @@ export function CartCheckoutDrawer({
   const handleApplyPromo = (codeOverride?: string) => {
     const code = (codeOverride ?? promoInput).trim().toUpperCase();
     if (!code) return;
-    if (code === 'MOCDAT10' || code === 'FREESHIP') {
+    if (code === SITE_CONFIG.announcement.promoCode || code === 'FREESHIP') {
       setAppliedPromo(code);
       setPromoInput(code);
       setPromoError('');
     } else {
-      setPromoError('Mã ưu đãi không hợp lệ. Thử MOCDAT10 hoặc FREESHIP.');
+      setPromoError(
+        `Mã ưu đãi không hợp lệ. Thử ${SITE_CONFIG.announcement.promoCode} hoặc FREESHIP.`
+      );
     }
   };
 
@@ -241,10 +244,10 @@ export function CartCheckoutDrawer({
     if (!validateCheckout() || enrichedItems.length === 0) return;
 
     setOrderError('');
-    const orderNumber = `MD-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const orderNumber = `${SITE_CONFIG.orderNumberPrefix}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const paymentReference =
       form.paymentMethod === 'vietqr'
-        ? `VSI${Date.now()}${Math.floor(1000 + Math.random() * 9000)}`
+        ? `${SITE_CONFIG.brandName}${Date.now()}${Math.floor(1000 + Math.random() * 9000)}`
         : undefined;
     const now = new Date();
     const deliveryDate = new Date(
@@ -543,7 +546,7 @@ export function CartCheckoutDrawer({
                         autoComplete="off"
                         value={promoInput}
                         onChange={(e) => setPromoInput(e.target.value)}
-                        placeholder="Nhập MOCDAT10 hoặc FREESHIP"
+                        placeholder={`Nhập ${SITE_CONFIG.announcement.promoCode} hoặc FREESHIP`}
                         className="flex-1 px-3 py-2 rounded-lg bg-[#F8F4EE] border border-[#E2D7C6] text-sm text-[#2B2018] placeholder:text-[#867363] focus:outline-none focus:border-[#073D63]"
                       />
                       <button
@@ -558,10 +561,12 @@ export function CartCheckoutDrawer({
                       <span>Gợi ý nhanh:</span>
                       <button
                         type="button"
-                        onClick={() => handleApplyPromo('MOCDAT10')}
+                        onClick={() =>
+                          handleApplyPromo(SITE_CONFIG.announcement.promoCode)
+                        }
                         className="underline underline-offset-2 text-[#073D63] hover:text-[#5E3A1F] cursor-pointer"
                       >
-                        MOCDAT10 (Giảm 10%)
+                        {SITE_CONFIG.announcement.promoCode} (Giảm 10%)
                       </button>
                       <span>·</span>
                       <button

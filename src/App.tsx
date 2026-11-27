@@ -21,6 +21,7 @@ import { OrderHistoryModal } from './components/OrderHistoryModal';
 import { ProductDetailModal } from './components/ProductDetailModal';
 import { SmartCatalog } from './components/SmartCatalog';
 import { TopBanner } from './components/TopBanner';
+import { SITE_CONFIG } from './config/site';
 import {
   confirmStoreOrderPayment,
   createStoreOrder,
@@ -189,10 +190,10 @@ export default function App() {
       const previous = previousStates.get(order.orderNumber);
       if (previous && previous.paymentStatus !== order.paymentStatus) {
         if (order.paymentStatus === 'Đã xác nhận chuyển khoản') {
-          notice = `Đơn #${order.orderNumber}: quản trị viên đã xác nhận thanh toán.`;
+          notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber}: quản trị viên đã xác nhận thanh toán.`;
         }
       } else if (previous && previous.orderStatus !== order.orderStatus) {
-        notice = `Đơn #${order.orderNumber} cập nhật: ${order.orderStatus}.`;
+        notice = `${SITE_CONFIG.brandName} · Đơn #${order.orderNumber} cập nhật: ${order.orderStatus}.`;
       }
       nextStates.set(order.orderNumber, {
         paymentStatus: order.paymentStatus,
@@ -238,6 +239,13 @@ export default function App() {
   const cartCount = useMemo(
     () => cart.reduce((sum, item) => sum + item.quantity, 0),
     [cart]
+  );
+  const footerCategories = useMemo(
+    () =>
+      SITE_CONFIG.footerCategories.filter((category) =>
+        products.some((product) => product.category === category)
+      ),
+    [products]
   );
 
   const handleUpdateFilters = (patch: Partial<FilterState>) => {
@@ -466,6 +474,7 @@ export default function App() {
       </main>
 
       <Footer
+        categories={footerCategories}
         onSelectCategory={handleSelectCategoryFromFooter}
         onOpenOrders={handleOpenOrders}
       />

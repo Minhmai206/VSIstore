@@ -23,8 +23,15 @@ import {
   MATERIALS_LIST,
   STUDIO_IMAGE_PRESETS,
 } from '../data/products';
+import { SITE_CONFIG } from '../config/site';
 import { getStorageBackendMode } from '../services/storeRepository';
-import { Order, OrderStatus, Product, ProductVariant } from '../types/shop';
+import {
+  Order,
+  OrderStatus,
+  Product,
+  ProductSpecification,
+  ProductVariant,
+} from '../types/shop';
 import {
   formatAddressWithCity,
   formatOrderDate,
@@ -70,6 +77,7 @@ interface DetailedProductFormState {
   dimensions: string;
   weight: string;
   artisanName: string;
+  specifications: ProductSpecification[];
   shortDesc: string;
   story: string;
   careGuide: string;
@@ -92,9 +100,10 @@ function createEmptyProductForm(nextIndex: number): DetailedProductFormState {
     price: 750000,
     originalPrice: 0,
     craftDays: 10,
-    dimensions: 'Cao 22 cm × Đường kính 12 cm',
-    weight: '1.2 kg (đã gồm hộp bảo vệ)',
-    artisanName: 'Nghệ nhân Nguyễn Văn Minh',
+    dimensions: '',
+    weight: '',
+    artisanName: '',
+    specifications: [],
     shortDesc: '',
     story: '',
     careGuide: 'Lau nhẹ bằng khăn mềm ẩm, tránh va đập mạnh và hóa chất tẩy.',
@@ -307,6 +316,7 @@ export function AdminDashboard({
       dimensions: product.dimensions,
       weight: product.weight ?? '',
       artisanName: product.artisanName,
+      specifications: product.specifications ?? [],
       shortDesc: product.shortDesc,
       story: product.story,
       careGuide: product.careGuide,
@@ -530,14 +540,25 @@ export function AdminDashboard({
         productForm.shortDesc.trim() ||
         `Chế Tác Tại Xưởng${productForm.village} từ ${productForm.material.toLowerCase()}.`,
       story:
-        productForm.story.trim() ||
-        `Tác phẩm hoàn thiện thủ công bởi ${productForm.artisanName}, giữ trọn sắc nâu be gần gũi và tinh thần Việt.`,
-      dimensions: productForm.dimensions.trim() || 'Theo quy cách xưởng',
+        productForm.story.trim(),
+      dimensions: productForm.dimensions.trim(),
       ...(weight ? { weight } : {}),
+      ...(productForm.specifications.some(
+        ({ label, value }) => label.trim() && value.trim()
+      )
+        ? {
+            specifications: productForm.specifications
+              .map(({ label, value }) => ({
+                label: label.trim(),
+                value: value.trim(),
+              }))
+              .filter(({ label, value }) => label && value),
+          }
+        : {}),
       careGuide:
         productForm.careGuide.trim() ||
         'Lau nhẹ bằng khăn mềm, giữ nơi khô thoáng.',
-      artisanName: productForm.artisanName.trim() || 'Nghệ nhân VSI',
+      artisanName: productForm.artisanName.trim(),
       craftDays: Math.max(1, Number(productForm.craftDays) || 7),
       rating: existing?.rating ?? 5.0,
       reviewCount: existing?.reviewCount ?? 1,
@@ -590,7 +611,7 @@ export function AdminDashboard({
           <div className="flex items-center justify-between lg:block">
             <div>
               <p className="text-lg font-bold tracking-tight text-[#2B2018]">
-                VSI
+                {SITE_CONFIG.brandName}
               </p>
               <p className="text-xs text-[#867363] mt-0.5">
                 {storageMode === 'firebase'
@@ -693,7 +714,7 @@ export function AdminDashboard({
         <header className="bg-[#FCF9F5] border-b border-[#E2D7C6] px-6 md:px-10 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-sm min-w-0">
             <span className="text-[#867363] hidden sm:inline">
-              Quản trị VSI
+              Quản trị {SITE_CONFIG.brandName}
             </span>
             <span className="text-[#867363] hidden sm:inline">/</span>
             <h1 className="font-semibold text-[#2B2018] truncate">
@@ -1660,6 +1681,102 @@ export function AdminDashboard({
                       className="w-full px-3 py-2 rounded-lg bg-[#F8F4EE] border border-[#E2D7C6] text-sm text-[#2B2018]"
                     />
                   </div>
+                </div>
+
+                <div className="mt-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-medium text-[#5E4B3C]">
+                      Thông số kỹ thuật
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setProductForm((form) => ({
+                          ...form,
+                          specifications: [
+                            ...form.specifications,
+                            { label: '', value: '' },
+                          ],
+                        }))
+                      }
+                      className="inline-flex items-center gap-1 rounded-lg bg-[#EFE8DD] px-3 py-1.5 text-xs font-semibold text-[#2B2018] hover:bg-[#E2D7C6]"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Thêm thông số
+                    </button>
+                  </div>
+                  {productForm.specifications.map((specification, index) => (
+                    <div
+                      key={`${fieldId}-product-spec-${index}`}
+                      className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2"
+                    >
+                      <div>
+                        <label
+                          htmlFor={`${fieldId}-product-spec-label-${index}`}
+                          className="mb-1 block text-xs font-medium text-[#5E4B3C]"
+                        >
+                          Tên thông số
+                        </label>
+                        <input
+                          id={`${fieldId}-product-spec-label-${index}`}
+                          name={`productSpecificationLabel${index}`}
+                          type="text"
+                          value={specification.label}
+                          onChange={(event) =>
+                            setProductForm((form) => ({
+                              ...form,
+                              specifications: form.specifications.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, label: event.target.value }
+                                  : item
+                              ),
+                            }))
+                          }
+                          className="w-full rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] px-3 py-2 text-sm text-[#2B2018]"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor={`${fieldId}-product-spec-value-${index}`}
+                          className="mb-1 block text-xs font-medium text-[#5E4B3C]"
+                        >
+                          Giá trị
+                        </label>
+                        <input
+                          id={`${fieldId}-product-spec-value-${index}`}
+                          name={`productSpecificationValue${index}`}
+                          type="text"
+                          value={specification.value}
+                          onChange={(event) =>
+                            setProductForm((form) => ({
+                              ...form,
+                              specifications: form.specifications.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, value: event.target.value }
+                                  : item
+                              ),
+                            }))
+                          }
+                          className="w-full rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] px-3 py-2 text-sm text-[#2B2018]"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setProductForm((form) => ({
+                            ...form,
+                            specifications: form.specifications.filter(
+                              (_, itemIndex) => itemIndex !== index
+                            ),
+                          }))
+                        }
+                        aria-label={`Xóa thông số ${index + 1}`}
+                        className="mb-0.5 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#E2D7C6] text-[#5E4B3C] hover:bg-[#EFE8DD]"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </div>
 
