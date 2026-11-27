@@ -50,13 +50,38 @@ import {
   OrderStatus,
   Product,
 } from './types/shop';
+import { removeVietnameseDiacritics } from './utils/format';
 
 const CART_STORAGE_KEY = 'moc_dat_cart_v1';
+type AppRoute =
+  | { type: 'home' }
+  | { type: 'product'; slug: string }
+  | { type: 'admin' }
+  | { type: 'not-found' };
+
 const AdminDashboard = lazy(() =>
   import('./components/AdminDashboard').then(({ AdminDashboard: component }) => ({
     default: component,
   }))
 );
+
+function parseAppRoute(pathname: string): AppRoute {
+  const normalizedPath = pathname.replace(/\/+$/, '') || '/';
+  if (normalizedPath === '/') return { type: 'home' };
+  if (normalizedPath === '/admin') return { type: 'admin' };
+
+  const productMatch = normalizedPath.match(/^\/san-pham\/([^/]+)$/);
+  if (productMatch) return { type: 'product', slug: productMatch[1] };
+
+  return { type: 'not-found' };
+}
+
+function getProductSlug(product: Product): string {
+  const nameSlug = removeVietnameseDiacritics(product.name)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `${nameSlug || 'san-pham'}-${encodeURIComponent(product.id)}`;
+}
 
 const DEFAULT_FILTERS: FilterState = {
   query: '',
@@ -70,9 +95,14 @@ const DEFAULT_FILTERS: FilterState = {
 };
 
 export default function App() {
-  const [view, setView] = useState<'store' | 'admin'>('store');
+  const [pathname, setPathname] = useState(() => window.location.pathname);
+  const [view, setView] = useState<'store' | 'admin'>(
+    () => (parseAppRoute(window.location.pathname).type === 'admin' ? 'admin' : 'store')
+  );
   const [adminUnlocked, setAdminUnlocked] = useState(false);
-  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [accountModalOpen, setAccountModalOpen] = useState(
+    () => parseAppRoute(window.location.pathname).type === 'admin'
+  );
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
 
   const [bannerVisible, setBannerVisible] = useState(true);
@@ -83,6 +113,18 @@ export default function App() {
   const [ordersModalOpen, setOrdersModalOpen] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const route = parseAppRoute(pathname);
+
+  const navigateTo = (path: string, replace = false) => {
+    if (window.location.pathname !== path) {
+      if (replace) {
+        window.history.replaceState({}, '', path);
+      } else {
+        window.history.pushState({}, '', path);
+      }
+    }
+    setPathname(window.location.pathname);
+  };
 
   const [initialCachedProducts] = useState<Product[] | null>(
     () => readCachedStoreProducts()
@@ -109,6 +151,40 @@ export default function App() {
       return [];
     }
   });
+
+  useEffect(() => {
+    const handlePopState = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const currentRoute = parseAppRoute(pathname);
+    if (currentRoute.type === 'admin') {
+      setView('admin');
+      setSelectedProduct(null);
+      if (!adminUnlocked) setAccountModalOpen(true);
+      return;
+    }
+
+    setView('store');
+    setAccountModalOpen(false);
+    if (currentRoute.type !== 'product') setSelectedProduct(null);
+  }, [adminUnlocked, pathname]);
+
+  useEffect(() => {
+    const currentRoute = parseAppRoute(pathname);
+    if (currentRoute.type !== 'product') return;
+
+    const matchedProduct = products.find(
+      (product) => getProductSlug(product) === currentRoute.slug
+    );
+    if (matchedProduct) {
+      setSelectedProduct(matchedProduct);
+    } else if (!productsLoading && !productsLoadError) {
+      setSelectedProduct(null);
+    }
+  }, [pathname, products, productsLoadError, productsLoading]);
 
   // Products are public; orders are loaded only after customer/admin authentication.
   useEffect(() => {
@@ -266,6 +342,16 @@ export default function App() {
     setFilters(DEFAULT_FILTERS);
   };
 
+  const handleSelectProduct = (product: Product) => {
+    setSelectedProduct(product);
+    navigateTo(`/san-pham/${getProductSlug(product)}`);
+  };
+
+  const handleCloseProduct = () => {
+    setSelectedProduct(null);
+    if (route.type === 'product') navigateTo('/');
+  };
+
   const handleAddToCart = (
     product: Product,
     variantId: string,
@@ -293,6 +379,7 @@ export default function App() {
   ) => {
     handleAddToCart(product, variantId, quantity);
     setSelectedProduct(null);
+    if (route.type === 'product') navigateTo('/');
     setDrawerStep('checkout');
     setDrawerOpen(true);
   };
@@ -392,6 +479,7 @@ export default function App() {
       setAdminUnlocked(true);
       setAccountModalOpen(false);
       setView('admin');
+      navigateTo('/admin');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error) {
       await signOutCustomer();
@@ -405,6 +493,7 @@ export default function App() {
     setOrders([]);
     setAdminOrders([]);
     setView('store');
+    navigateTo('/');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -429,6 +518,15 @@ export default function App() {
     () => (customer ? orders.filter((order) => order.customerUid === customer.uid) : []),
     [customer, orders]
   );
+  const routeProduct =
+    route.type === 'product'
+      ? products.find((product) => getProductSlug(product) === route.slug)
+      : undefined;
+  const productRouteNotFound =
+    route.type === 'product' &&
+    !routeProduct &&
+    !productsLoading &&
+    !productsLoadError;
 
   if (view === 'admin' && adminUnlocked) {
     return (
@@ -460,6 +558,22 @@ export default function App() {
     );
   }
 
+  if (route.type === 'not-found' || productRouteNotFound) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-[#F8F4EE] px-4 text-center text-[#2B2018]">
+        <p className="text-sm font-semibold uppercase tracking-widest text-[#867363]">404</p>
+        <h1 className="mt-2 text-2xl font-semibold">Không tìm thấy trang</h1>
+        <button
+          type="button"
+          onClick={() => navigateTo('/')}
+          className="mt-6 rounded-lg bg-[#073D63] px-5 py-2.5 text-sm font-medium text-[#FCF9F5]"
+        >
+          Quay về cửa hàng
+        </button>
+      </main>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-transparent text-[#2B2018]">
       <TopBanner
@@ -473,7 +587,7 @@ export default function App() {
         searchQuery={filters.query}
         products={products}
         onSearchChange={(value) => handleUpdateFilters({ query: value })}
-        onSelectProduct={(product) => setSelectedProduct(product)}
+        onSelectProduct={handleSelectProduct}
         onSearchSubmit={handleExploreCollection}
         onOpenCart={() => {
           setDrawerStep('cart');
@@ -495,7 +609,7 @@ export default function App() {
           onRetryProducts={handleRetryProducts}
           onUpdateFilters={handleUpdateFilters}
           onResetFilters={handleResetFilters}
-          onSelectProduct={(product) => setSelectedProduct(product)}
+          onSelectProduct={handleSelectProduct}
           onQuickAdd={(product, variantId) =>
             handleAddToCart(product, variantId, 1)
           }
@@ -547,12 +661,16 @@ export default function App() {
       <CustomerAccountModal
         isOpen={accountModalOpen}
         customer={customer}
-        onClose={() => setAccountModalOpen(false)}
+        onClose={() => {
+          setAccountModalOpen(false);
+          if (route.type === 'admin' && !adminUnlocked) navigateTo('/');
+        }}
         onCustomerAuthenticated={async (profile) => {
           const loadedOrders = await fetchCustomerOrders(profile.uid);
           setCustomer(profile);
           setOrders(loadedOrders);
           setAccountModalOpen(false);
+          if (route.type === 'admin') navigateTo('/');
         }}
         onOpenOrders={() => {
           setAccountModalOpen(false);
@@ -568,7 +686,7 @@ export default function App() {
 
       <ProductDetailModal
         product={selectedProduct}
-        onClose={() => setSelectedProduct(null)}
+        onClose={handleCloseProduct}
         onAddToCart={handleAddToCart}
         onBuyNow={handleBuyNow}
       />

@@ -25,5 +25,15 @@
         }
       ]
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/admin",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/san-pham/:slug",
+      "destination": "/index.html"
+    }
   ]
 }
