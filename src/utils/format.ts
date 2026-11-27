@@ -9,6 +9,22 @@ export function formatOrderDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('vi-VN');
 }
 
+export function formatAddressWithCity(address: string, city: string): string {
+  const normalizedAddress = address.trim();
+  const normalizedCity = city.trim();
+  if (!normalizedAddress) return normalizedCity;
+  if (!normalizedCity) return normalizedAddress;
+
+  const cityKey = removeVietnameseDiacritics(normalizedCity);
+  const addressAlreadyIncludesCity = normalizedAddress
+    .split(',')
+    .some((part) => removeVietnameseDiacritics(part) === cityKey);
+
+  return addressAlreadyIncludesCity
+    ? normalizedAddress
+    : `${normalizedAddress}, ${normalizedCity}`;
+}
+
 export function removeVietnameseDiacritics(input: string): string {
   return input
     .normalize('NFD')

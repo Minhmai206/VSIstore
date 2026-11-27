@@ -1,4 +1,4 @@
-import { SyntheticEvent, useMemo, useRef, useState } from 'react';
+import { SyntheticEvent, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -26,6 +26,7 @@ import {
 import { getStorageBackendMode } from '../services/storeRepository';
 import { Order, OrderStatus, Product, ProductVariant } from '../types/shop';
 import {
+  formatAddressWithCity,
   formatOrderDate,
   formatVND,
   removeVietnameseDiacritics,
@@ -183,6 +184,7 @@ export function AdminDashboard({
   onUpdateOrderStatus,
   onConfirmOrderPayment,
 }: AdminDashboardProps) {
+  const fieldId = useId().replace(/:/g, '');
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [productQuery, setProductQuery] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] =
@@ -867,9 +869,15 @@ export function AdminDashboard({
             <div className="space-y-5">
               <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl p-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
                 <div className="relative flex-1 max-w-md">
+                  <label htmlFor={`${fieldId}-product-search`} className="sr-only">
+                    Tìm sản phẩm trong quản trị
+                  </label>
                   <Search className="w-4 h-4 text-[#867363] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
+                    id={`${fieldId}-product-search`}
+                    name="productSearch"
                     type="text"
+                    autoComplete="off"
                     value={productQuery}
                     onChange={(e) => setProductQuery(e.target.value)}
                     placeholder="Tìm sản phẩm theo tên, mã SKU, ..."
@@ -877,7 +885,12 @@ export function AdminDashboard({
                   />
                 </div>
 
+                <label htmlFor={`${fieldId}-product-category-filter`} className="sr-only">
+                  Lọc danh mục sản phẩm trong quản trị
+                </label>
                 <select
+                  id={`${fieldId}-product-category-filter`}
+                  name="productCategory"
                   value={productCategoryFilter}
                   onChange={(e) => setProductCategoryFilter(e.target.value)}
                   aria-label="Lọc danh mục sản phẩm trong quản trị"
@@ -1019,9 +1032,15 @@ export function AdminDashboard({
             <div className="space-y-5">
               <div className="bg-[#FCF9F5] border border-[#E2D7C6] rounded-xl p-4 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
                 <div className="relative flex-1 max-w-md">
+                  <label htmlFor={`${fieldId}-order-search`} className="sr-only">
+                    Tìm đơn hàng trong quản trị
+                  </label>
                   <Search className="w-4 h-4 text-[#867363] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
+                    id={`${fieldId}-order-search`}
+                    name="orderSearch"
                     type="text"
+                    autoComplete="off"
                     value={orderQuery}
                     onChange={(e) => setOrderQuery(e.target.value)}
                     placeholder="Tìm theo mã đơn, tên khách hàng, số điện thoại..."
@@ -1111,7 +1130,12 @@ export function AdminDashboard({
                               </p>
                             </td>
                             <td className="py-3.5 px-4">
+                              <label htmlFor={`${fieldId}-order-status-${order.orderNumber}`} className="sr-only">
+                                Cập nhật trạng thái đơn {order.orderNumber}
+                              </label>
                               <select
+                                id={`${fieldId}-order-status-${order.orderNumber}`}
+                                name={`orderStatus-${order.orderNumber}`}
                                 value={order.orderStatus}
                                 onChange={(e) =>
                                   void handleOrderStatusChange(
@@ -1266,7 +1290,12 @@ export function AdminDashboard({
                       {uploadingImages ? 'Đang xử lý ảnh nét...' : 'Chọn ảnh từ máy tính'}
                     </span>
                   </button>
+                  <label htmlFor={`${fieldId}-product-images`} className="sr-only">
+                    Chọn ảnh sản phẩm từ máy tính
+                  </label>
                   <input
+                    id={`${fieldId}-product-images`}
+                    name="productImages"
                     ref={fileInputRef}
                     type="file"
                     accept="image/*"
@@ -1350,8 +1379,12 @@ export function AdminDashboard({
 
                   {/* Studio Preset Quick Picker */}
                   <div className="mt-3 pt-3 border-t border-[#E2D7C6] flex flex-wrap items-center gap-2 text-xs">
-                    <span className="text-[#867363]">Hoặc thêm nhanh ảnh studio:</span>
+                    <label htmlFor={`${fieldId}-studio-image`} className="text-[#867363]">
+                      Hoặc thêm nhanh ảnh studio:
+                    </label>
                     <select
+                      id={`${fieldId}-studio-image`}
+                      name="studioImage"
                       value=""
                       onChange={(e) => {
                         const url = e.target.value;
@@ -1385,10 +1418,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="sm:col-span-2">
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-name`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Tên sản phẩm *
                     </label>
                     <input
+                      id={`${fieldId}-product-name`}
+                      name="productName"
                       type="text"
                       value={productForm.name}
                       onChange={(e) =>
@@ -1399,10 +1434,12 @@ export function AdminDashboard({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-sku`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Mã SKU
                     </label>
                     <input
+                      id={`${fieldId}-product-sku`}
+                      name="productSku"
                       type="text"
                       value={productForm.sku}
                       onChange={(e) =>
@@ -1415,10 +1452,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-category`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Danh mục
                     </label>
                     <select
+                      id={`${fieldId}-product-category`}
+                      name="productCategory"
                       value={productForm.category}
                       onChange={(e) =>
                         setProductForm((f) => ({
@@ -1437,10 +1476,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-village`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Nơi sản xuất
                     </label>
                     <select
+                      id={`${fieldId}-product-village`}
+                      name="productVillage"
                       value={productForm.village}
                       onChange={(e) =>
                         setProductForm((f) => ({ ...f, village: e.target.value }))
@@ -1458,10 +1499,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-material`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Chất liệu 
                     </label>
                     <select
+                      id={`${fieldId}-product-material`}
+                      name="productMaterial"
                       value={productForm.material}
                       onChange={(e) =>
                         setProductForm((f) => ({ ...f, material: e.target.value }))
@@ -1481,10 +1524,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-price`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Giá bán (VNĐ) *
                     </label>
                     <input
+                      id={`${fieldId}-product-price`}
+                      name="productPrice"
                       type="number"
                       min={10000}
                       step={10000}
@@ -1500,10 +1545,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-original-price`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Giá gốc trước giảm (tuỳ chọn)
                     </label>
                     <input
+                      id={`${fieldId}-product-original-price`}
+                      name="productOriginalPrice"
                       type="number"
                       min={0}
                       step={10000}
@@ -1520,10 +1567,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-craft-days`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Số ngày chế tác
                     </label>
                     <input
+                      id={`${fieldId}-product-craft-days`}
+                      name="productCraftDays"
                       type="number"
                       min={1}
                       value={productForm.craftDays}
@@ -1538,10 +1587,12 @@ export function AdminDashboard({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-availability`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Nhãn tình trạng
                     </label>
                     <select
+                      id={`${fieldId}-product-availability`}
+                      name="productAvailability"
                       value={productForm.availabilityTag}
                       onChange={(e) =>
                         setProductForm((f) => ({
@@ -1561,10 +1612,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-dimensions`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Kích thước (Dài × Rộng × Cao)
                     </label>
                     <input
+                      id={`${fieldId}-product-dimensions`}
+                      name="productDimensions"
                       type="text"
                       value={productForm.dimensions}
                       onChange={(e) =>
@@ -1574,10 +1627,12 @@ export function AdminDashboard({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-weight`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Khối lượng / Quy cách đóng gói
                     </label>
                     <input
+                      id={`${fieldId}-product-weight`}
+                      name="productWeight"
                       type="text"
                       value={productForm.weight}
                       onChange={(e) =>
@@ -1588,10 +1643,12 @@ export function AdminDashboard({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-artisan`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Nghệ nhân / Xưởng chế tác
                     </label>
                     <input
+                      id={`${fieldId}-product-artisan`}
+                      name="productArtisan"
                       type="text"
                       value={productForm.artisanName}
                       onChange={(e) =>
@@ -1635,10 +1692,12 @@ export function AdminDashboard({
                       className="p-3 rounded-lg bg-[#F8F4EE] border border-[#E2D7C6] grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center"
                     >
                       <div className="sm:col-span-5">
-                        <label className="block text-[11px] text-[#867363] mb-0.5">
+                        <label htmlFor={`${fieldId}-variant-${idx}-label`} className="block text-[11px] text-[#867363] mb-0.5">
                           Tên phiên bản
                         </label>
                         <input
+                          id={`${fieldId}-variant-${idx}-label`}
+                          name={`variants.${idx}.label`}
                           type="text"
                           value={variant.label}
                           onChange={(e) =>
@@ -1649,11 +1708,13 @@ export function AdminDashboard({
                       </div>
 
                       <div className="sm:col-span-2">
-                        <label className="block text-[11px] text-[#867363] mb-0.5">
+                        <label htmlFor={`${fieldId}-variant-${idx}-color`} className="block text-[11px] text-[#867363] mb-0.5">
                           Màu mẫu
                         </label>
                         <div className="flex items-center gap-2">
                           <input
+                            id={`${fieldId}-variant-${idx}-color`}
+                            name={`variants.${idx}.color`}
                             type="color"
                             value={variant.colorHex}
                             onChange={(e) =>
@@ -1670,10 +1731,12 @@ export function AdminDashboard({
                       </div>
 
                       <div className="sm:col-span-2">
-                        <label className="block text-[11px] text-[#867363] mb-0.5">
+                        <label htmlFor={`${fieldId}-variant-${idx}-price-delta`} className="block text-[11px] text-[#867363] mb-0.5">
                           Cộng thêm (₫)
                         </label>
                         <input
+                          id={`${fieldId}-variant-${idx}-price-delta`}
+                          name={`variants.${idx}.priceDelta`}
                           type="number"
                           step={10000}
                           value={variant.priceDelta}
@@ -1687,10 +1750,12 @@ export function AdminDashboard({
                       </div>
 
                       <div className="sm:col-span-2">
-                        <label className="block text-[11px] text-[#867363] mb-0.5">
+                        <label htmlFor={`${fieldId}-variant-${idx}-stock`} className="block text-[11px] text-[#867363] mb-0.5">
                           Tồn kho
                         </label>
                         <input
+                          id={`${fieldId}-variant-${idx}-stock`}
+                          name={`variants.${idx}.stock`}
                           type="number"
                           min={0}
                           value={variant.stock}
@@ -1726,10 +1791,12 @@ export function AdminDashboard({
                 </h3>
 
                 <div>
-                  <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                  <label htmlFor={`${fieldId}-product-short-description`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                     Mô tả ngắn ngoài thẻ sản phẩm
                   </label>
                   <textarea
+                    id={`${fieldId}-product-short-description`}
+                    name="productShortDescription"
                     rows={2}
                     value={productForm.shortDesc}
                     onChange={(e) =>
@@ -1741,10 +1808,12 @@ export function AdminDashboard({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                  <label htmlFor={`${fieldId}-product-story`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                     Câu chuyện chế tác chi tiết (hiển thị khi bấm xem sản phẩm)
                   </label>
                   <textarea
+                    id={`${fieldId}-product-story`}
+                    name="productStory"
                     rows={3}
                     value={productForm.story}
                     onChange={(e) =>
@@ -1757,10 +1826,12 @@ export function AdminDashboard({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-care-guide`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Hướng dẫn bảo quản
                     </label>
                     <input
+                      id={`${fieldId}-product-care-guide`}
+                      name="productCareGuide"
                       type="text"
                       value={productForm.careGuide}
                       onChange={(e) =>
@@ -1770,10 +1841,12 @@ export function AdminDashboard({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-product-keywords`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Từ khóa tìm kiếm thông minh (cách nhau dấu phẩy)
                     </label>
                     <input
+                      id={`${fieldId}-product-keywords`}
+                      name="productKeywords"
                       type="text"
                       value={productForm.keywordsText}
                       onChange={(e) =>
@@ -1787,8 +1860,10 @@ export function AdminDashboard({
                   </div>
                 </div>
 
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-[#2B2018] cursor-pointer pt-1">
+                <label htmlFor={`${fieldId}-product-is-new`} className="inline-flex items-center gap-2 text-xs font-medium text-[#2B2018] cursor-pointer pt-1">
                   <input
+                    id={`${fieldId}-product-is-new`}
+                    name="productIsNew"
                     type="checkbox"
                     checked={productForm.isNew}
                     onChange={(e) =>
@@ -1902,7 +1977,7 @@ export function AdminDashboard({
                   )}
                 <p>
                   <strong className="text-[#2B2018]">Địa chỉ:</strong>{' '}
-                  {inspectingOrder.address}, {inspectingOrder.city}
+                  {formatAddressWithCity(inspectingOrder.address, inspectingOrder.city)}
                 </p>
                 <p>
                   <strong className="text-[#2B2018]">Dự kiến giao:</strong>{' '}

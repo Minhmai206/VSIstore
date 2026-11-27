@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useId, useState } from 'react';
 import { LockKeyhole, UserRound, X } from 'lucide-react';
 import {
   CustomerProfile,
@@ -20,11 +20,11 @@ interface CustomerAccountModalProps {
 }
 
 const REGISTRATION_FIELDS = [
-  { key: 'fullName', label: 'Họ và tên', type: 'text', placeholder: 'Nguyễn Minh Anh' },
-  { key: 'phone', label: 'Số điện thoại', type: 'tel', placeholder: '0912 345 678' },
-  { key: 'address', label: 'Địa chỉ nhận hàng', type: 'text', placeholder: 'Số nhà, đường, phường/xã, quận/huyện' },
-  { key: 'email', label: 'Email', type: 'email', placeholder: 'ban@example.com' },
-  { key: 'password', label: 'Mật khẩu', type: 'password', placeholder: 'Ít nhất 6 ký tự' },
+  { key: 'fullName', label: 'Họ và tên', type: 'text', placeholder: 'Nguyễn Minh Anh', autoComplete: 'name' },
+  { key: 'phone', label: 'Số điện thoại', type: 'tel', placeholder: '0912 345 678', autoComplete: 'tel' },
+  { key: 'address', label: 'Địa chỉ nhận hàng', type: 'text', placeholder: 'Số nhà, đường, phường/xã, quận/huyện', autoComplete: 'street-address' },
+  { key: 'email', label: 'Email', type: 'email', placeholder: 'ban@example.com', autoComplete: 'email' },
+  { key: 'password', label: 'Mật khẩu', type: 'password', placeholder: 'Ít nhất 6 ký tự', autoComplete: 'new-password' },
 ] as const;
 
 function getErrorMessage(
@@ -73,6 +73,7 @@ export function CustomerAccountModal({
   onSignOut,
   onAdminAuthenticated,
 }: CustomerAccountModalProps) {
+  const fieldId = useId().replace(/:/g, '');
   const [mode, setMode] = useState<AccountMode>('login');
   const [registrationStep, setRegistrationStep] = useState(0);
   const [registration, setRegistration] = useState({
@@ -263,13 +264,16 @@ export function CustomerAccountModal({
               </div>
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">
+              <label htmlFor={`${fieldId}-${REGISTRATION_FIELDS[registrationStep].key}`} className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">
                 {REGISTRATION_FIELDS[registrationStep].label}
               </label>
               <input
+                id={`${fieldId}-${REGISTRATION_FIELDS[registrationStep].key}`}
+                name={REGISTRATION_FIELDS[registrationStep].key}
                 autoFocus
                 required
                 type={REGISTRATION_FIELDS[registrationStep].type}
+                autoComplete={REGISTRATION_FIELDS[registrationStep].autoComplete}
                 value={registration[REGISTRATION_FIELDS[registrationStep].key]}
                 onChange={(event) => {
                   const key = REGISTRATION_FIELDS[registrationStep].key;
@@ -312,20 +316,24 @@ export function CustomerAccountModal({
               Đăng nhập bằng tài khoản Firebase đã được cấp quyền quản trị.
             </p>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">Email quản trị</label>
+              <label htmlFor={`${fieldId}-admin-email`} className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">Email quản trị</label>
               <input
+                id={`${fieldId}-admin-email`}
+                name="adminEmail"
                 autoFocus
                 required
                 type="email"
-                autoComplete="username"
+                autoComplete="email"
                 value={adminEmail}
                 onChange={(event) => setAdminEmail(event.target.value)}
                 className="w-full rounded-lg border border-[#E2D7C6] bg-[#F8F4EE] px-3.5 py-2.5 text-sm"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">Mật khẩu</label>
+              <label htmlFor={`${fieldId}-admin-password`} className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">Mật khẩu</label>
               <input
+                id={`${fieldId}-admin-password`}
+                name="adminPassword"
                 type="password"
                 autoComplete="current-password"
                 required
@@ -346,8 +354,10 @@ export function CustomerAccountModal({
           <form onSubmit={handleLogin} className="space-y-4 p-6">
             <p className="text-sm text-[#5E4B3C]">Đăng nhập để lưu thông tin nhận hàng và theo dõi đơn mua.</p>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">Email</label>
+              <label htmlFor={`${fieldId}-customer-email`} className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">Email</label>
               <input
+                id={`${fieldId}-customer-email`}
+                name="email"
                 autoFocus
                 required
                 type="email"
@@ -358,8 +368,10 @@ export function CustomerAccountModal({
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">Mật khẩu</label>
+              <label htmlFor={`${fieldId}-customer-password`} className="mb-1.5 block text-sm font-medium text-[#5E4B3C]">Mật khẩu</label>
               <input
+                id={`${fieldId}-customer-password`}
+                name="password"
                 required
                 type="password"
                 autoComplete="current-password"

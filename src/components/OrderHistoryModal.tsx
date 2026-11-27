@@ -1,7 +1,11 @@
 import { useEffect } from 'react';
 import { CheckCircle2, PackageCheck, X } from 'lucide-react';
 import { Order } from '../types/shop';
-import { formatOrderDate, formatVND } from '../utils/format';
+import {
+  formatAddressWithCity,
+  formatOrderDate,
+  formatVND,
+} from '../utils/format';
 
 const TRACKING_STEPS = [
   'Chờ xác nhận',
@@ -166,7 +170,8 @@ export function OrderHistoryModal({
 
                 <div className="pt-3 border-t border-[#E2D7C6] flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="text-[#5E4B3C]">
-                    Giao đến: {order.address}, {order.city} · Dự kiến{' '}
+                    Giao đến:{' '}
+                    {formatAddressWithCity(order.address, order.city)} · Dự kiến{' '}
                     {order.estimatedDelivery}
                   </span>
                   <span className="text-sm font-semibold text-[#073D63] tabular-nums">

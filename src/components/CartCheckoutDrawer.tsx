@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -24,6 +24,7 @@ import {
 import {
   formatCardExpiry,
   formatCardNumber,
+  formatAddressWithCity,
   formatVND,
 } from '../utils/format';
 import { CustomerProfile } from '../services/customerRepository';
@@ -89,6 +90,7 @@ export function CartCheckoutDrawer({
   customer,
   customerOrders,
 }: CartCheckoutDrawerProps) {
+  const fieldId = useId().replace(/:/g, '');
   const [promoInput, setPromoInput] = useState('');
   const [appliedPromo, setAppliedPromo] = useState<string | null>(null);
   const [promoError, setPromoError] = useState('');
@@ -528,15 +530,17 @@ export function CartCheckoutDrawer({
                   {/* Promo Code Box */}
                   <div className="pt-4 border-t border-[#EFE8DD] space-y-2.5">
                     <label
-                      htmlFor="promo-input"
+                      htmlFor={`${fieldId}-promo-code`}
                       className="block text-xs font-medium text-[#5E4B3C]"
                     >
                       Mã ưu đãi 
                     </label>
                     <div className="flex gap-2">
                       <input
-                        id="promo-input"
+                        id={`${fieldId}-promo-code`}
+                        name="promoCode"
                         type="text"
+                        autoComplete="off"
                         value={promoInput}
                         onChange={(e) => setPromoInput(e.target.value)}
                         placeholder="Nhập MOCDAT10 hoặc FREESHIP"
@@ -618,11 +622,14 @@ export function CartCheckoutDrawer({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-full-name`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Họ và tên *
                     </label>
                     <input
+                      id={`${fieldId}-full-name`}
+                      name="fullName"
                       type="text"
+                      autoComplete="name"
                       value={form.fullName}
                       onChange={(e) =>
                         setForm((f) => ({ ...f, fullName: e.target.value }))
@@ -638,11 +645,14 @@ export function CartCheckoutDrawer({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-phone`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Số điện thoại *
                     </label>
                     <input
+                      id={`${fieldId}-phone`}
+                      name="phone"
                       type="tel"
+                      autoComplete="tel"
                       value={form.phone}
                       onChange={(e) =>
                         setForm((f) => ({ ...f, phone: e.target.value }))
@@ -660,11 +670,14 @@ export function CartCheckoutDrawer({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-email`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Email nhận hóa đơn *
                     </label>
                     <input
+                      id={`${fieldId}-email`}
+                      name="email"
                       type="email"
+                      autoComplete="email"
                       value={form.email}
                       onChange={(e) =>
                         setForm((f) => ({ ...f, email: e.target.value }))
@@ -680,10 +693,13 @@ export function CartCheckoutDrawer({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                    <label htmlFor={`${fieldId}-city`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                       Tỉnh / Thành phố
                     </label>
                     <select
+                      id={`${fieldId}-city`}
+                      name="address-level1"
+                      autoComplete="address-level1"
                       value={form.city}
                       onChange={(e) =>
                         setForm((f) => ({ ...f, city: e.target.value }))
@@ -701,11 +717,14 @@ export function CartCheckoutDrawer({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                  <label htmlFor={`${fieldId}-address`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                     Địa chỉ giao hàng chi tiết *
                   </label>
                   <input
+                    id={`${fieldId}-address`}
+                    name="address"
                     type="text"
+                    autoComplete="shipping street-address"
                     value={form.address}
                     onChange={(e) =>
                       setForm((f) => ({ ...f, address: e.target.value }))
@@ -721,11 +740,14 @@ export function CartCheckoutDrawer({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                  <label htmlFor={`${fieldId}-delivery-note`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                     Ghi chú giao hàng hoặc gói quà
                   </label>
                   <input
+                    id={`${fieldId}-delivery-note`}
+                    name="deliveryNote"
                     type="text"
+                    autoComplete="off"
                     value={form.note}
                     onChange={(e) =>
                       setForm((f) => ({ ...f, note: e.target.value }))
@@ -839,12 +861,15 @@ export function CartCheckoutDrawer({
                 {form.paymentMethod === 'card' && (
                   <div className="p-4 rounded-xl bg-[#F8F4EE] border border-[#E2D7C6] space-y-3">
                     <div>
-                      <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                      <label htmlFor={`${fieldId}-card-number`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                         Số thẻ ATM / Visa / Mastercard
                       </label>
                       <input
+                        id={`${fieldId}-card-number`}
+                        name="cardNumber"
                         type="text"
                         inputMode="numeric"
+                        autoComplete="cc-number"
                         value={form.cardNumber}
                         onChange={(e) =>
                           setForm((f) => ({
@@ -863,11 +888,14 @@ export function CartCheckoutDrawer({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                      <label htmlFor={`${fieldId}-card-holder`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                         Tên chủ thẻ (không dấu)
                       </label>
                       <input
+                        id={`${fieldId}-card-holder`}
+                        name="cardHolder"
                         type="text"
+                        autoComplete="cc-name"
                         value={form.cardHolder}
                         onChange={(e) =>
                           setForm((f) => ({
@@ -887,12 +915,15 @@ export function CartCheckoutDrawer({
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                        <label htmlFor={`${fieldId}-card-expiry`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                           Hết hạn (MM/YY)
                         </label>
                         <input
+                          id={`${fieldId}-card-expiry`}
+                          name="cardExpiry"
                           type="text"
                           inputMode="numeric"
+                          autoComplete="cc-exp"
                           value={form.cardExpiry}
                           onChange={(e) =>
                             setForm((f) => ({
@@ -911,12 +942,15 @@ export function CartCheckoutDrawer({
                       </div>
 
                       <div>
-                        <label className="block text-xs font-medium text-[#5E4B3C] mb-1">
+                        <label htmlFor={`${fieldId}-card-cvv`} className="block text-xs font-medium text-[#5E4B3C] mb-1">
                           Mã bảo mật CVV
                         </label>
                         <input
+                          id={`${fieldId}-card-cvv`}
+                          name="cardCvv"
                           type="password"
                           inputMode="numeric"
+                          autoComplete="cc-csc"
                           maxLength={4}
                           value={form.cardCvv}
                           onChange={(e) =>
@@ -1097,7 +1131,7 @@ export function CartCheckoutDrawer({
                   </p>
                   <p>
                     <span className="text-[#867363]">Địa chỉ:</span>{' '}
-                    {receiptOrder.address}, {receiptOrder.city}
+                    {formatAddressWithCity(receiptOrder.address, receiptOrder.city)}
                   </p>
                   <p>
                     <span className="text-[#867363]">Email hóa đơn:</span>{' '}
@@ -1199,7 +1233,7 @@ export function CartCheckoutDrawer({
                 onClick={() => onChangeStep('checkout')}
                 className="w-full py-3 px-4 rounded-lg bg-[#073D63] hover:bg-[#5E3A1F] text-[#FCF9F5] text-sm font-medium transition-colors cursor-pointer"
               >
-                Tiến hành thanh toán trực tuyến
+                Đặt hàng
               </button>
             ) : (
               <>

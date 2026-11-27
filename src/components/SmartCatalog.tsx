@@ -1,4 +1,4 @@
-import { MouseEvent, RefObject, useMemo, useRef, useState } from 'react';
+import { MouseEvent, RefObject, useId, useMemo, useRef, useState } from 'react';
 import {
   Check,
   Search,
@@ -44,6 +44,7 @@ export function SmartCatalog({
   onQuickAdd,
   searchInputRef,
 }: SmartCatalogProps) {
+  const fieldId = useId().replace(/:/g, '');
   const [searchFocused, setSearchFocused] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [addedId, setAddedId] = useState<string | null>(null);
@@ -193,7 +194,7 @@ export function SmartCatalog({
         <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="space-y-4 lg:sticky lg:top-24">
             <div className="rounded-xl border border-[#E2D7C6] bg-[#FCF9F5] p-4">
-              <label className="mb-2 block text-sm font-semibold text-[#2B2018]" htmlFor="catalog-search">
+              <label className="mb-2 block text-sm font-semibold text-[#2B2018]" htmlFor={`${fieldId}-catalog-search`}>
                 Tìm kiếm sản phẩm
               </label>
               <div className="relative">
@@ -202,9 +203,11 @@ export function SmartCatalog({
                 strokeWidth={1.75}
               />
               <input
-                id="catalog-search"
+                id={`${fieldId}-catalog-search`}
+                name="q"
                 ref={searchInputRef}
                 type="text"
+                autoComplete="off"
                 value={filters.query}
                 onChange={(e) => onUpdateFilters({ query: e.target.value })}
                 onFocus={() => {
@@ -311,13 +314,14 @@ export function SmartCatalog({
             </div>
 
             <div className="rounded-xl border border-[#E2D7C6] bg-[#FCF9F5] p-4">
-              <label className="mb-2 block text-sm font-semibold text-[#2B2018]" htmlFor="catalog-sort">
+              <label className="mb-2 block text-sm font-semibold text-[#2B2018]" htmlFor={`${fieldId}-catalog-sort`}>
                 Sắp xếp
               </label>
               <div className="relative">
                 <ArrowUpDown className="w-4 h-4 text-[#867363] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <select
-                  id="catalog-sort"
+                  id={`${fieldId}-catalog-sort`}
+                  name="sort"
                   value={filters.sortBy}
                   onChange={(e) =>
                     onUpdateFilters({ sortBy: e.target.value as SortOption })
@@ -351,8 +355,9 @@ export function SmartCatalog({
               </button>
               {showAdvanced && (
                 <div className="space-y-4 border-t border-[#EFE8DD] p-4">
-                  {(['Công cụ máy móc', 'Bộ kit'] as CraftCategory[]).map((category) => (
+                  {(['Công cụ máy móc', 'Bộ kit'] as CraftCategory[]).map((category, index) => (
                     <label
+                      htmlFor={`${fieldId}-category-${index}`}
                       key={category}
                       className="flex cursor-pointer items-center justify-between gap-3 text-sm text-[#5E4B3C]"
                     >
@@ -362,6 +367,8 @@ export function SmartCatalog({
                           {categoryCounts[category] || 0}
                         </span>
                         <input
+                          id={`${fieldId}-category-${index}`}
+                          name="category"
                           type="checkbox"
                           checked={filters.category === category}
                           onChange={(event) =>
